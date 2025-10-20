@@ -47,9 +47,9 @@ logger = setup_logging()
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-14B")
 
 # === Step 1.2: Global Constants ===
-MAX_CONTEXT_SIZE = 3600  # Max tokens for the context window
+MAX_CONTEXT_SIZE = 3900  # Max tokens for the context window
 MAX_QUESTIONS_PER_CALL = 5  # Max QAs to request in a single LLM call
-PHASE3_ARTICLE_OVERLAP = 1   # Number of articles to overlap between phase 3 chunks
+PHASE3_ARTICLE_OVERLAP = 0   
 
 
 # === Step 2: Pydantic Models for Structured Output ===
@@ -78,7 +78,7 @@ class QAPair(BaseModel):
     """QA pair without type field - type is added when saving"""
     question: str
     answer: str
-    references_ids: List[int]  # COMMENT: Should be List[int] but LLM might return strings
+    references_ids: List[int] 
 
 class QAOutput(BaseModel):
     qa_pairs: List[QAPair] = Field(default_factory=list)
@@ -224,25 +224,30 @@ class ContextPreparer:
     @staticmethod
     def prepare_context_phase1(law_data: LawData) -> Tuple[str, List[int]]:
         """
-        MODIFIED: Returns List[int] of all article IDs instead of part names
+        Prepare structured context for QA generation.
+        Returns:
+            - A formatted string with law name, optional summary, and articles.
+            - A list of all article IDs for tracking and evaluation.
         """
-        parts = law_data.parts
         law_name = law_data.metadata.get("الاسم", "قانون غير محدد")
-        context_lines = [f"اسم القانون: {law_name}"]
-        
-        selected_articles = []  # CHANGED: Collect article IDs
+        context_lines = [f"# اسم النظام: {law_name}"]
 
         if law_data.brief:
-            context_lines.append(f"نبذة عن القانون: {law_data.brief}")
-        
-        for part_key, part_info in parts.items():
-            context_lines.append(f"\n--- {part_info.name} ---")
+            context_lines.append(f"## نبذة عن النظام: {law_data.brief.strip()}")
+
+        selected_articles = []
+
+        for part_key, part_info in law_data.parts.items():
+            context_lines.append(f"\n### {part_info.name.strip()}:")
+
             for art_info in part_info.articles.values():
-                context_lines.append(f'Article id: {art_info.id}\n')
-                context_lines.append(f"The Article:\n {art_info.text}")
-                selected_articles.append(art_info.id)  # CHANGED: Add article ID
-        
+                context_lines.append(
+                    f"\n#### المادة (ID: {art_info.id}):\n{art_info.text.strip()}"
+                )
+                selected_articles.append(art_info.id)
+
         return "\n".join(context_lines), selected_articles
+
 
     @staticmethod
     def prepare_context_phase2(law_data: LawData) -> Tuple[str, List[int]]:
@@ -269,20 +274,21 @@ class ContextPreparer:
                 selected_keys.append(random.choice(remaining))
         
         law_name = law_data.metadata.get("الاسم", "قانون غير محدد")
-        context_lines = [f"اسم القانون: {law_name}"]
-        
-        selected_articles = []  # CHANGED: Collect article IDs
+        context_lines = [f"# اسم النظام: {law_name}"]
 
         if law_data.brief:
-            context_lines.append(f"نبذة عن القانون: {law_data.brief}")
-        
+            context_lines.append(f"## نبذة عن النظام: {law_data.brief.strip()}")
+
+
+        selected_articles = []
         for key in selected_keys:
             part = parts[key]
-            context_lines.append(f"\n--- {part.name} ---")
+            context_lines.append(f"\n### {part.name.strip()}:")
             for art_info in part.articles.values():
-                context_lines.append(f'Article id: {art_info.id}\n')
-                context_lines.append(f"The Article:\n {art_info.text}")
-                selected_articles.append(art_info.id)  # CHANGED: Add article ID
+                context_lines.append(
+                    f"\n#### المادة (ID: {art_info.id}):\n{art_info.text.strip()}"
+                )
+                selected_articles.append(art_info.id)
         
         return "\n".join(context_lines), selected_articles
 
@@ -301,11 +307,11 @@ class ContextPreparer:
         for the next chunk, including overlap.
         """
         law_name = law_data.metadata.get("الاسم", "قانون غير محدد")
-        context_lines = [f"اسم القانون: {law_name}"]
+        context_lines = [f"# اسم النظام: {law_name}"]
         selected_article_ids = []
 
         if law_data.brief:
-            context_lines.append(f"نبذة عن القانون: {law_data.brief}")
+            context_lines.append(f"## نبذة عن النظام: {law_data.brief.strip()}")
         
         base_context = "\n".join(context_lines)
         current_tokens = count_tokens(base_context)
@@ -338,9 +344,10 @@ class ContextPreparer:
                 article_lines.append(f"\n--- {part_name} ---")
                 last_part_name_added = part_name
             
-            article_lines.append(f'Article id: {art.id}\n')
-            article_lines.append(f"The Article:\n {art.text}")
 
+            article_lines.append(
+                    f"\n### المادة (ID: {art.id}):\n{art.text.strip()}"
+                )
             article_text_to_add = "\n".join(article_lines)
             article_tokens = count_tokens(article_text_to_add)
             
@@ -387,24 +394,40 @@ class QAGenerator:
 
     def _create_qa_generation_prompt(self) -> PromptTemplate:
         template = """
-    أنت خبير قانوني سعودي. النص التالي يخص أحد الأنظمة السعودية.
+    أنت خبير قانوني سعودي. النص التالي يتضمن مقتطفات من نظام سعودي.
 
-    **النص القانوني:**
+    **النص القانوني (المحتوى الذي يجب الاعتماد عليه):**
     {context}
 
-    **تعليمات إنشاء الأسئلة:**
-    - أنشئ أسئلة قانونية دقيقة ذات صلة مباشرة بالقانون المذكور في النص.
-    - يجب أن تكون الأسئلة مستندة إلى النص فقط.
-    - لا تكتب الإجابات.
-    - أدرج قائمة تحتوي فقط على **المعرفات (id)** للمواد التي يمكن أن يُستمد منها الجواب.
-    - مثال للإخراج المتوقع:
+    **التعليمات العامة (مهمة - اقرأها بعناية):**
+    1. أنشئ أزواج سؤال-إجابة قصيرة (QA pairs). كل زوج يحتوي حقلَي: "question" و "answer" وحقلاً إضافياً "references_ids".  
+    2. **الأسئلة**: صِيغ أسئلة قانونية واضحة ومحددة تستند مباشرة إلى النص الموجود في الـ context. تجنّب الأسئلة المفتوحة جداً أو التي تتطلب معرفة خارجية.  
+    3. **الإجابات**: أجب بجملة واحدة إلى جملتين فقط، مباشرة ومقتصرة على ما تستدلُّ عليه من المواد المشار إليها؛ **لا تضف تفسيراً أو معلومات خارج النص**.  
+    4. **المراجع**: لكل سؤال أدرج قائمة صحيحة من **معرفات المواد (integers)** في الحقل `references_ids` — فقط المعرفات الموجودة في الـ context مسموح بها. لا تدرج نص أو شرح داخل هذه القائمة، ولا تضع المعرفات داخل حقل الإجابة.  
+    5. لا تضمن أي معرفات غير واردة في الـ context.  
+    6. لا تكرر نفس السؤال بصيغ مختلفة؛ كل سؤال يجب أن يضيف قيمة جديدة (تغطي أحكام، شروط، استثناءات، التزامات، أو عقوبات).  
+    7. حافظ على اللغة العربية الفصحى القانونية والمختصرة.
 
+    **تنسيق الإخراج (مطلوب بدقة JSON - مصفوفة من الكائنات):**
     [
-    {{ "question": "ما هي العقوبة على ترك العامل عمله بدون إشعار؟", "reference_ids": [12] }},
-    {{ "question": "ما الشروط اللازمة لإنهاء عقد العمل؟", "reference_ids": [40, 41] }}
+    {{
+        "question": "<سؤال>",
+        "answer": "<إجابة قصيرة>",
+        "references_ids": [12, 40]
+    }},
+    {{
+        "question": "...",
+        "answer": "...",
+        "references_ids": [41]
+    }}
     ]
 
-    **عدد الأسئلة المطلوب:** {num_questions}
+    **قواعد إضافية للهيكلة:**  
+    - حقول JSON يجب أن تكون بالاسم الدقيق: `question`, `answer`, `references_ids`.  
+    - `references_ids` يجب أن يحتوي عناصر من نوع integer فقط.  
+    - عدد الأزواج المطلوب: {num_questions}
+
+    ابدأ الآن وأنتج مخرجات مطابقة تمامًا لشكل JSON أعلاه.
     """
         return PromptTemplate(
             input_variables=["context", "num_questions"],
@@ -641,6 +664,8 @@ def main():
     logger.info("="*60)
     logger.info("Starting QA Dataset Generation")
     logger.info("="*60)
+
+    output_file = "law_qa_dataset_v2.json"
     
     try:
         # Initialize components
@@ -651,11 +676,11 @@ def main():
         
         # Generate dataset
         generator = DatasetGenerator(llm)
-        dataset = generator.generate_qa_dataset(laws_data, "law_qa_dataset.json")
+        dataset = generator.generate_qa_dataset(laws_data, output_file)
         
         logger.info("="*60)
         logger.info(f"SUCCESS! Generated {len(dataset.qa_pairs)} QA pairs")
-        logger.info(f"Output file: law_qa_dataset.json")
+        logger.info(f"Output file: {output_file}")
         logger.info("="*60)
         
     except Exception as e:
