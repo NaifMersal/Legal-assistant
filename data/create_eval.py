@@ -659,6 +659,7 @@ class DatasetGenerator:
         
         logger.info(f"Generation complete! Total QAs: {len(dataset.qa_pairs)}")
         return dataset
+    
 # === Step 10: Main Execution ===
 def main():
     logger.info("="*60)
