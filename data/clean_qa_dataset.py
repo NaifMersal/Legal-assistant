@@ -32,6 +32,20 @@ def validate_qa_references(qa: dict) -> bool:
     
     return reference_set.issubset(selected_articles_set)
 
+def remove_id_references(qa: dict) -> bool:
+    """
+    Check if the question contains ID references or article references in Arabic.
+    Returns True if the question is clean (no references), False if it contains references.
+    """
+    question = qa.get('question', '').lower()
+    # Check for "(ID: number)" pattern
+    if "(id:" in question:
+        return False
+    # Check for "للمادة number" pattern in Arabic
+    if "للمادة" in question:
+        return False
+    return True
+
 def clean_dataset(dataset: dict) -> tuple[dict, dict]:
     """
     Clean the dataset by removing all QAs from laws that have any invalid QAs.
@@ -48,6 +62,7 @@ def clean_dataset(dataset: dict) -> tuple[dict, dict]:
         'total_qas_before': len(dataset['qa_pairs']),
         'laws_removed': 0,
         'qas_removed': 0,
+        'qas_removed_with_refs': 0,
         'laws_with_invalid_qas': set()
     }
     
@@ -63,10 +78,16 @@ def clean_dataset(dataset: dict) -> tuple[dict, dict]:
     # Create new cleaned dataset
     cleaned_qas = []
     for qa in dataset['qa_pairs']:
-        if qa['law_name'] not in invalid_laws:
-            cleaned_qas.append(qa)
-        else:
+        if qa['law_name'] in invalid_laws:
             stats['qas_removed'] += 1
+            continue
+            
+        # Check for ID and article references in questions
+        if not remove_id_references(qa):
+            stats['qas_removed_with_refs'] += 1
+            continue
+            
+        cleaned_qas.append(qa)
     
     stats['laws_removed'] = len(invalid_laws)
     
@@ -90,8 +111,8 @@ def save_dataset(dataset: dict, file_path: str):
         raise
 
 def main():
-    input_file = "law_qa_dataset_v2.json"
-    output_file = "law_qa_dataset_v2.json"
+    input_file = "law_qa_dataset_validated.json"
+    output_file = "law_qa_dataset_validated.json"
     
     logger.info(f"Loading dataset from {input_file}")
     dataset = load_dataset(input_file)
@@ -105,7 +126,9 @@ def main():
     logger.info(f"Total laws processed: {stats['total_laws']}")
     logger.info(f"Total QAs before cleaning: {stats['total_qas_before']}")
     logger.info(f"Laws removed: {stats['laws_removed']}")
-    logger.info(f"QAs removed: {stats['qas_removed']}")
+    logger.info(f"QAs removed due to invalid references: {stats['qas_removed']}")
+    logger.info(f"QAs removed due to ID/article references in questions: {stats['qas_removed_with_refs']}")
+    logger.info(f"Total QAs removed: {stats['qas_removed'] + stats['qas_removed_with_refs']}")
     logger.info(f"Total QAs after cleaning: {len(cleaned_dataset['qa_pairs'])}")
     logger.info("\nLaws with invalid QAs:")
     for law in stats['laws_with_invalid_qas']:

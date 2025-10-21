@@ -7,7 +7,8 @@ from create_eval import PromptTemplate, LawData, LawInfo,QADataset,GeneratedQA,D
       ProgressTracker,MAX_CONTEXT_SIZE, MAX_QUESTIONS_PER_CALL, setup_logging, count_tokens,\
         initialize_llm, load_and_prepare_laws, get_openai_callback
 
-import datetime
+from datetime import datetime
+
 logger = setup_logging()
 
 class ValidationStatus(str, Enum):
