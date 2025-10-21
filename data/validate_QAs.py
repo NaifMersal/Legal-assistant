@@ -39,19 +39,21 @@ class CompactQAValidationPipeline:
         template = """
 You are a legal expert validating QA pairs against provided articles.
 
-ARTICLES:\n {selected_articles_context}
-QUESTION:\n {question}
-ANSWER:\n {answer}
+ARTICLES:\n {selected_articles_context}\n\n
+QUESTION:\n {question}\n\n
+ANSWER:\n {answer}\n\n
 CLAIMED_REFS: {claimed_references}
 
 Validate:
-1. Are all claimed refs in the articles? 
-2. Do they support the answer?
-3. If refs are wrong/missing, suggest correct ones from articles only.
-4. If unanswerable, set is_answerable=false.
+1. Are all claimed refs present in the provided articles above? IMPORTANT: Only use article IDs that appear in the provided ARTICLES section.
+2. Do the referenced articles fully support the answer?
+3. If refs are wrong/missing, suggest correct ones from the provided articles only.
+4. If question cannot be answered from the provided articles, set is_answerable=false.
 
 OUTPUT FORMAT:
 {{"is_answerable": true, "suggested_refs": [12,30]}}
+
+IMPORTANT: Only suggest article IDs that appear in the provided ARTICLES section above.
 
 Analyze:
 """
@@ -92,6 +94,8 @@ Analyze:
                 original_references=[],
                 rejection_reason="No refs provided"
             )
+            
+
         
         articles_context = self._build_articles_context(law_data, selected_article_ids)
         if not articles_context.strip():
@@ -118,6 +122,15 @@ Analyze:
                     rejection_reason="Unanswerable from provided articles"
                 )
             
+            # suggested_refs
+            if not (result.suggested_refs and set(result.suggested_refs).issubset(set(selected_article_ids))): 
+                return QAValidationResult(
+                    status=ValidationStatus.REJECTED,
+                    original_references=claimed_references,
+                    rejection_reason=f"references {result.suggested_refs} not in selected articles {selected_article_ids}"
+                )
+                
+            
             # suggested_refs == claimed_refs => valid
             if set(result.suggested_refs) == set(claimed_references):
                 return QAValidationResult(
@@ -126,19 +139,12 @@ Analyze:
                 )
             
             # suggested_refs != claimed_refs => corrected
-            if result.suggested_refs and set(result.suggested_refs).issubset(set(selected_article_ids)):  # Has valid suggestions
-                return QAValidationResult(
+            return QAValidationResult(
                     status=ValidationStatus.CORRECTED,
                     original_references=claimed_references,
                     corrected_references=result.suggested_refs
                 )
-            else:
-                return QAValidationResult(
-                    status=ValidationStatus.REJECTED,
-                    original_references=claimed_references,
-                    rejection_reason="No valid references found"
-                )
-                
+            
         except Exception as e:
             return QAValidationResult(
                 status=ValidationStatus.REJECTED,
@@ -173,7 +179,7 @@ class ValidatedDatasetGenerator(DatasetGenerator):
         dataset.metadata.model = model_name
         
         for idx, law in enumerate(laws_data, 1):
-            if law.law_name in processed_laws:
+            if law.law_name in processed_laws or law.law_name in "نظام وحدات الإخصاب والأجنة وعلاج العقم":
                 logger.info(f"[{idx}/{len(laws_data)}] Skipping: {law.law_name}")
                 continue
             
@@ -192,12 +198,20 @@ class ValidatedDatasetGenerator(DatasetGenerator):
             total_articles_in_law = len(all_articles_list)
             p3_article_start_index = 0
             
+            max_retries = 3  # Maximum number of retries per chunk
+            consecutive_failures = 0  # Track consecutive failures
+            
             while q_generated_for_law < total_q_needed:
                 num_q_this_chunk = min(MAX_QUESTIONS_PER_CALL, total_q_needed - q_generated_for_law)
                 if num_q_this_chunk <= 0:
                     break
                 
-                logger.info(f"  Chunk {chunk_num}: Target {num_q_this_chunk} QAs")
+                # Break if we've had too many consecutive failures
+                if consecutive_failures >= max_retries:
+                    logger.warning(f"  Breaking after {max_retries} consecutive failures to generate valid QAs")
+                    break
+                    
+                logger.info(f"  Chunk {chunk_num}: Target {num_q_this_chunk} QAs (Attempt {consecutive_failures + 1}/{max_retries})")
                 
                 # Get context and selected articles (same as before)
                 context, selected_articles = "", []
@@ -228,7 +242,7 @@ class ValidatedDatasetGenerator(DatasetGenerator):
                     # Generate QAs
                     with get_openai_callback() as cb:
                         qa_output = self.qa_generator.generate_qa(context, num_q_this_chunk)
-                        logger.info(f"    Generated {len(qa_output.qa_pairs)} QAs")
+                        logger.info(f"    Checking Generated {len(qa_output.qa_pairs)} QAs")
                     
                     # === VALIDATION STEP ===
                     validated_count = 0
@@ -253,7 +267,6 @@ class ValidatedDatasetGenerator(DatasetGenerator):
                         elif validation_result.status == ValidationStatus.CORRECTED:
                             self.validation_stats["corrected"] += 1
                             final_refs = validation_result.corrected_references
-                            selected_articles
                             validated_count += 1
                             logger.info(f"    ✓ Corrected refs: {qa.references_ids} → {final_refs}")
                             
@@ -279,6 +292,13 @@ class ValidatedDatasetGenerator(DatasetGenerator):
                     
                     logger.info(f"    Validation: {validated_count}/{len(qa_output.qa_pairs)} passed")
                     q_generated_for_law += validated_count
+                    
+                    # Reset or increment consecutive failures based on validation success
+                    if validated_count > 0:
+                        consecutive_failures = 0  # Reset on success
+                    else:
+                        consecutive_failures += 1  # Increment on complete failure
+                        
                     chunk_num += 1
                     
                     # Save progress
