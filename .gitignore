@@ -1,6 +1,6 @@
 .venv/
 *.csv
 !all_labor_laws_consolidated.csv
-
+*m3_legal_faiss.index
 # Ignore Chroma database directory
 chroma_db/
