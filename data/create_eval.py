@@ -45,7 +45,7 @@ logger = setup_logging()
 
 # Initialize tokenizer for Arabic
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-14B")
-
+id_part = lambda  id ,include_id : f"المادة (ID:{id})" if include_id else ""
 # === Step 1.2: Global Constants ===
 MAX_CONTEXT_SIZE = 3900  # Max tokens for the context window
 MAX_QUESTIONS_PER_CALL = 5  # Max QAs to request in a single LLM call
@@ -112,15 +112,15 @@ class QADataset(BaseModel):
     qa_pairs: List[GeneratedQA] = Field(default_factory=list)
 
 # === Step 3: LLM Initialization ===
-def initialize_llm():
+def initialize_llm(model_name: str = "hf.co/unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF:Q4_K_M", temperature: float = 0.0, max_tokens: int = 3000):
     from langchain_openai.chat_models.base import ChatOpenAI
     logger.info("Initializing LLM")
     return ChatOpenAI(
         openai_api_base ="http://localhost:11434/v1",
         api_key ="good",
-        model="hf.co/unsloth/Qwen3-30B-A3B-Instruct-2507-GGUF:Q4_K_M",
-        temperature=0.0,
-        max_tokens=2000
+        model=model_name,
+        temperature=temperature,
+        max_tokens=max_tokens
     )
 
 def count_tokens(text: str) -> int:
@@ -222,7 +222,7 @@ class PhaseClassifier:
 # === Step 6: Context Preparation ===
 class ContextPreparer:
     @staticmethod
-    def prepare_context_phase1(law_data: LawData) -> Tuple[str, List[int]]:
+    def prepare_context_phase1(law_data: LawData, include_id = True) -> Tuple[str, List[int]]:
         """
         Prepare structured context for QA generation.
         Returns:
@@ -242,7 +242,7 @@ class ContextPreparer:
 
             for art_info in part_info.articles.values():
                 context_lines.append(
-                    f"\n#### المادة (ID: {art_info.id}):\n{art_info.text.strip()}"
+                    f"\n####{id_part(art_info.id, include_id)}:\n{art_info.text.strip()}"
                 )
                 selected_articles.append(art_info.id)
 
@@ -250,7 +250,7 @@ class ContextPreparer:
 
 
     @staticmethod
-    def prepare_context_phase2(law_data: LawData) -> Tuple[str, List[int]]:
+    def prepare_context_phase2(law_data: LawData, include_id =True) -> Tuple[str, List[int]]:
         """
         MODIFIED: Returns List[int] of selected article IDs instead of part names
         """
@@ -286,7 +286,7 @@ class ContextPreparer:
             context_lines.append(f"\n### {part.name.strip()}:")
             for art_info in part.articles.values():
                 context_lines.append(
-                    f"\n#### المادة (ID: {art_info.id}):\n{art_info.text.strip()}"
+                    f"\n####{id_part(art_info.id, include_id)}:\n{art_info.text.strip()}"
                 )
                 selected_articles.append(art_info.id)
         
@@ -297,7 +297,8 @@ class ContextPreparer:
         law_data: LawData, 
         max_tokens: int,
         start_article_index: int,
-        all_articles_list: List[Article]
+        all_articles_list: List[Article],
+        include_id = True
     ) -> Tuple[str, List[int], int]:
         """
         MODIFIED: This is the "controlled" chunking phase.
@@ -346,7 +347,7 @@ class ContextPreparer:
             
 
             article_lines.append(
-                    f"\n### المادة (ID: {art.id}):\n{art.text.strip()}"
+                    f"\n####{id_part(art.id, include_id)}:\n{art.text.strip()}"
                 )
             article_text_to_add = "\n".join(article_lines)
             article_tokens = count_tokens(article_text_to_add)
