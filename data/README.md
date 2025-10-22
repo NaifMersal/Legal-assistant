@@ -168,3 +168,14 @@ This structure indicates the entire text content was extracted as a single block
   ]
 }
 ```
+### 📊 5. Exploratory Data Analysis (EDA)
+
+A statistical summary of the dataset are available in the notebook:
+
+**`Simple_EDA.ipynb`**
+
+This includes:
+
+* Distribution of articles per law and per part
+* Token length analysis (articles, parts, laws, briefs)
+* Article status statistics (Active, Modified, Canceled)
