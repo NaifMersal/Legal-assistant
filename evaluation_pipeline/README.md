@@ -113,29 +113,29 @@ Mean of average precision scores across all queries.
 ### Base Model Comparisons
 
 #### BGE-M3 with Inner Product (IP) Indexing
-![BGE-M3 Performance](evaluation_metrics_m3.png)
+![BGE-M3 Performance](asstes/evaluation_metrics_m3.png)
 
 #### BGE-M3 with L2 Distance Indexing
-![BGE-M3 L2 Performance](evaluation_metrics_m3_L2.png)
+![BGE-M3 L2 Performance](asstes/evaluation_metrics_m3_L2.png)
 
 ### Fine-tuned Model Comparisons
 
 #### BGE-M3-Law with Inner Product (IP) Indexing
-![BGE-M3-Law Performance](evaluation_metrics_law.png)
+![BGE-M3-Law Performance](asstes/evaluation_metrics_law.png)
 
 #### BGE-M3-Law with L2 Distance Indexing
-![BGE-M3-Law L2 Performance](evaluation_metrics_law_L2.png)
+![BGE-M3-Law L2 Performance](asstes/evaluation_metrics_law_L2.png)
 
 ### Advanced Retrieval Strategies
 
 #### Regular Retrieval (Dense Only)
-![Regular M3 Performance](evaluation_metrics_regular_m3.png)
+![Regular M3 Performance](asstes/evaluation_metrics_regular_m3.png)
 
 #### Hybrid Retrieval (Dense + Sparse)
-![Hybrid M3 Performance](evaluation_metrics_hybrid_m3.png)
+![Hybrid M3 Performance](asstes/evaluation_metrics_hybrid_m3.png)
 
 #### Reranked Results
-![M3 Reranked Performance](evaluation_metrics_m3_reranked.png)
+![M3 Reranked Performance](asstes/evaluation_metrics_m3_reranked.png)
 
 ---
 
