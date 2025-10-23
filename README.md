@@ -16,27 +16,27 @@ An intelligent AI-powered legal assistant specialized in Saudi Arabian law, feat
 ## 🏗️ Architecture
 
 ```
-┌─────────────────┐
+┌───────────────┐
 │  React UI (RTL) │ Arabic-first Interface
 │  مسألة قانونية   │ TypeScript + shadcn/ui
-└────────┬────────┘
+└───────────────┬───────────────┘
          │ HTTP/REST + WebSocket
-┌────────▼────────┐
+┌───────────────▼───────────────┐
 │  FastAPI Server │ Python 3.9+
-└────────┬────────┘
+└───────────────┬───────────────┘
          │
-    ┌────┴─────┐
-    │          │
-┌───▼──┐  ┌───▼────┐
-│ RAG  │  │Retriever│
-│System│  │(Hybrid) │
-└───┬──┘  └───┬────┘
+    ┌────┴────┐
     │         │
-┌───▼──────┐  ┌───▼────┐
-│ Gemini   │  │ FAISS  │
-│2.5 Flash │  │ + BM25 │
+┌───▼───┐  ┌───▼────┐
+│ RAG   │  │Retriever│
+│System │  │(Hybrid) │
+└───────┘  └─────────┘
+    │         │
+┌───▼────┐  ┌───▼────┐
+│ Gemini │  │ FAISS  │
+│2.5 Flash│  │ + BM25 │
 │(Tool Use)│  │16.3K docs
-└──────────┘  └────────┘
+└─────────┘  └─────────┘
 ```
 
 ## 📁 Project Structure
@@ -48,135 +48,62 @@ Legal-assistant/
 │   ├── config.py            # Configuration management
 │   ├── models.py            # Pydantic models
 │   ├── rag_service.py       # RAG service wrapper
-│   └── utils/               # Utility modules
-│       ├── rag.py           # RAG implementation
-│       └── retriever.py     # Hybrid retrieval system
-├── law-UI/                  # React frontend (RTL)
-│   ├── src/
-│   │   ├── components/      # React components
-│   │   │   ├── ChatInterface.tsx  # Main chat UI
-│   │   │   ├── Hero.tsx     # Landing hero section
-│   │   │   ├── Features.tsx # Features showcase
-│   │   │   └── ui/          # shadcn/ui components
-│   │   ├── pages/           # Page components
-│   │   │   └── Index.tsx    # Main landing page
-│   │   └── lib/             # Utilities
+│   └── utils/               # Utility functions
+├── data/                     # Data files and scripts
+│   ├── m3_legal_faiss.index # FAISS index file
+│   ├── saudi_laws_scraped.json # Scraped legal data
+│   └── evaluation_data/     # Evaluation datasets
+├── law-UI/                   # React frontend
+│   ├── src/                 # Source code
 │   ├── public/              # Static assets
-│   │   ├── logo-small.png   # مسألة قانونية logo
-│   │   ├── bot-icon-small.png
-│   │   ├── user-icon-small.png
-│   │   └── favicon.png
-│   └── package.json
-├── data/                    # Data files
-│   ├── saudi_laws_scraped.json  # 16,371 legal documents
-│   ├── m3_legal_faiss.index     # FAISS vector index
-│   └── evaluation_data/         # QA datasets for testing
-├── start_server.sh          # Quick start script (Mac/Linux)
-├── start_server.bat         # Quick start script (Windows)
-├── test_api.py             # API testing script
-├── check_setup.py          # Setup verification script
-├── requirements.txt         # Python dependencies
-└── .env.example            # Environment variables template
+│   └── package.json         # Project dependencies
 ```
 
-## 🚀 Getting Started
+## 🚀 Setup and Deployment
 
 ### Prerequisites
 
-- **Python 3.9+**
-- **Node.js 18+** (for frontend)
-- **Google API Key** (for Gemini 2.5 Flash)
-- **8GB+ RAM** recommended for embedding model
+- Python 3.9+
+- Node.js and npm (use [nvm](https://github.com/nvm-sh/nvm#installing-and-updating) to manage Node.js versions)
 
-### Quick Start (Recommended)
+### Backend Setup
 
-**For macOS/Linux:**
-```bash
-chmod +x start_server.sh
-./start_server.sh
-```
-
-**For Windows:**
-```bash
-start_server.bat
-```
-
-These scripts will automatically:
-- Create/activate virtual environment
-- Install Python dependencies
-- Check for `.env` file
-- Start the FastAPI backend on port 8000
-
-### Manual Setup
-
-#### Backend Setup
-
-1. **Clone the repository**
-   ```bash
-   cd Legal-assistant
+1. Navigate to the backend directory:
+   ```sh
+   cd /path/to/Legal-assistant
    ```
 
-2. **Create virtual environment**
-   ```bash
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. **Install dependencies**
-   ```bash
+2. Install Python dependencies:
+   ```sh
    pip install -r requirements.txt
    ```
 
-4. **Set up environment variables**
-   ```bash
-   cp .env.example .env
-   # Edit .env and add your GOOGLE_API_KEY
+3. Start the FastAPI server:
+   ```sh
+   uvicorn app.main:app --host 0.0.0.0 --port 8000
    ```
-
-5. **Run the backend server**
-   ```bash
-   python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-   ```
-
-   The API will be available at `http://localhost:8000`
-   - Docs: `http://localhost:8000/docs`
-   - Health: `http://localhost:8000/health`
 
 ### Frontend Setup
 
-1. **Navigate to frontend directory**
-   ```bash
+1. Navigate to the frontend directory:
+   ```sh
    cd law-UI
    ```
 
-2. **Install dependencies**
-   ```bash
+2. Install Node.js dependencies:
+   ```sh
    npm install
    ```
 
-3. **Run development server**
-   ```bash
+3. Start the development server:
+   ```sh
    npm run dev
    ```
 
-   The UI will be available at `http://localhost:5173`
-   
-   **Custom port (optional):**
-   ```bash
-   npm run dev -- --port 8081
-   ```
+### Deployment
 
-### Verify Setup
-
-Run the setup checker:
-```bash
-python check_setup.py
-```
-
-Test the API:
-```bash
-python test_api.py
-```
+- Deploy the backend using your preferred cloud provider.
+- Deploy the frontend using Vercel, Netlify, or similar platforms.
 
 ## 🔌 API Endpoints
 

@@ -6,6 +6,7 @@ import faiss
 import nltk
 from FlagEmbedding import BGEM3FlagModel
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import BaseMessage
 
 # Import from utils
 from app.utils.retriever import Retriever
@@ -164,7 +165,7 @@ class RAGService:
         logger.info(f"Found {len(results)} results")
         return results
     
-    def answer(self, question: str) -> str:
+    def answer(self, question: str, chat_history: Optional[List[BaseMessage]] = None) -> str:
         """
         Get answer using full RAG system (Retriever + LLM)
         
@@ -175,6 +176,7 @@ class RAGService:
         
         Args:
             question: User's question in natural language
+            chat_history: Optional conversation history as LangChain messages
             
         Returns:
             AI-generated answer with legal context
@@ -183,7 +185,7 @@ class RAGService:
             raise RuntimeError("RAG service not initialized")
         
         logger.info(f"Answering question: '{question}'")
-        answer = self.rag_system.answer(question)
+        answer = self.rag_system.answer(question, chat_history=chat_history)
         return answer
     
     def clear_history(self):
