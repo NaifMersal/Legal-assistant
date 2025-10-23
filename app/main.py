@@ -2,11 +2,13 @@
 import logging
 import uuid
 from contextlib import asynccontextmanager
-from typing import Dict
+from typing import Dict, List
 
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 
 from app.config import get_settings, Settings
 from app.models import (
@@ -29,6 +31,22 @@ logger = logging.getLogger(__name__)
 
 # Session storage (in production, use Redis or similar)
 sessions: Dict[str, list] = {}
+
+
+def convert_session_to_langchain_messages(session_history: list) -> List[BaseMessage]:
+    """
+    Convert session history (dicts with 'role' and 'content') 
+    to LangChain message objects for the RAG system.
+    
+    This allows the chatbot to remember previous messages in the conversation.
+    """
+    messages = []
+    for msg in session_history:
+        if msg["role"] == "user":
+            messages.append(HumanMessage(content=msg["content"]))
+        elif msg["role"] == "assistant":
+            messages.append(AIMessage(content=msg["content"]))
+    return messages
 
 
 @asynccontextmanager
@@ -121,8 +139,14 @@ async def chat(
         # Generate or use existing session ID
         session_id = request.session_id or str(uuid.uuid4())
         
-        # Get answer from RAG system
-        answer = service.answer(request.message)
+        # Get existing conversation history for this session
+        session_history = sessions.get(session_id, [])
+        
+        # Convert session history to LangChain messages
+        chat_history = convert_session_to_langchain_messages(session_history)
+        
+        # Get answer from RAG system WITH conversation history
+        answer = service.answer(request.message, chat_history=chat_history)
         
         # Store in session (simple in-memory storage)
         if session_id not in sessions:
