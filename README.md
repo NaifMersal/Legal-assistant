@@ -105,7 +105,7 @@ Legal-assistant/
 - Deploy the backend using your preferred cloud provider.
 - Deploy the frontend using Vercel, Netlify, or similar platforms.
 
-## � Vector Database Setup and RAG Model
+## Vector Database Setup and RAG Model
 
 ### Building the Vector Database
 To build the vector database for the legal documents:
