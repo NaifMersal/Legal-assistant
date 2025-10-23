@@ -125,13 +125,21 @@ class Retriever:
         scores = self._distances_to_scores(distances[0])
         doc_ids = indices[0].tolist()  # Already ordinal indices
         return self._normalize(scores), doc_ids
-
+    
     def sparse(self, query: str, k: int = 10) -> Tuple[np.ndarray, List[int]]:
         """Sparse retrieval using BM25. Returns (normalized scores, ordinal doc_ids)."""
         tokenized_query = word_tokenize(query.lower())
         bm25_scores = self.bm25.get_scores(tokenized_query)
-        top_k_indices = np.argsort(bm25_scores)[::-1][:k]
-
+        
+        # Use argpartition for better performance than full argsort
+        if k < len(bm25_scores):
+            # Get indices of top-k scores without full sort
+            top_k_indices = np.argpartition(bm25_scores, -k)[-k:]
+            # Sort only the top-k results
+            top_k_indices = top_k_indices[np.argsort(bm25_scores[top_k_indices])[::-1]]
+        else:
+            top_k_indices = np.argsort(bm25_scores)[::-1]
+        
         scores = bm25_scores[top_k_indices]
         doc_ids = top_k_indices.tolist()
         return self._normalize(scores), doc_ids
@@ -140,28 +148,32 @@ class Retriever:
         """
         Hybrid retrieval using dense and sparse signals.
         - Dense: top-k candidates from FAISS (ordinal IDs).
-        - Sparse: full BM25 scores over corpus.
+        - Sparse: BM25 scores only for dense candidates.
         - Combine only on dense candidates.
         """
+        # Get dense results
         dense_scores, dense_doc_ids = self.dense(query, k=k)
-        full_sparse_scores, _ = self.sparse(query, k=len(self.corpus))
-
-        # Combine scores for dense candidates
-        results = []
-        for d_score, doc_id in zip(dense_scores, dense_doc_ids):
-            s_score = full_sparse_scores[doc_id]  # Direct indexing
-            hybrid_score = dense_weight * float(d_score) + sparse_weight * float(s_score)
-            results.append((doc_id, hybrid_score))
-
-        results.sort(key=lambda x: x[1], reverse=True)
-
-        if not results:
+        
+        if not dense_doc_ids:
             return np.array([]), []
-
-        final_doc_ids, final_scores = zip(*results)
-        normalized_final_scores = self._normalize(np.array(final_scores))
-        return normalized_final_scores, list(final_doc_ids)
-    
+        
+        # Get BM25 scores ONLY for the dense candidate documents
+        tokenized_query = word_tokenize(query.lower())
+        sparse_scores = np.array([self.bm25.get_score(tokenized_query, doc_id) for doc_id in dense_doc_ids])
+        
+        # Normalize sparse scores for the candidate set
+        normalized_sparse = self._normalize(sparse_scores)
+        
+        # Combine scores using vectorized operations
+        hybrid_scores = dense_weight * dense_scores + sparse_weight * normalized_sparse
+        
+        # Re-sort by hybrid scores
+        sorted_indices = np.argsort(hybrid_scores)[::-1]
+        
+        final_scores = hybrid_scores[sorted_indices]
+        final_doc_ids = [dense_doc_ids[i] for i in sorted_indices]
+        
+        return final_scores, final_doc_ids
 
     def re_ranked_search(
         self,
