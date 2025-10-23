@@ -7,13 +7,17 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 
+
+
 class Retriever:
-    """Handles loading retrieval models and performing search."""
+    """Handles loading retrieval models and performing search using aligned ordinal indices."""
 
     def __init__(self, faiss_index_path: str, documents_path: str,
                  embeddings_model: Any, metric_type: str = 'ip'):
         """
-        Initializes the Retriever.
+        Initializes the Retriever with strict alignment between FAISS index, corpus, and metadata.
+
+        All documents are assigned ordinal IDs: 0, 1, ..., N-1, matching FAISS index positions.
 
         Args:
             faiss_index_path: Path to the FAISS index file.
@@ -30,70 +34,79 @@ class Retriever:
             raise ValueError("metric_type must be either 'ip' or 'l2'")
 
         print("Loading documents and metadata...")
+        self.doc_metadata = []  # List indexed by ordinal doc_id (0 to N-1)
+        self.sub_categories_article_ids = {}  # Maps subcat -> list of sub_categories indices
 
-        self.doc_metadata = {}
         with open(documents_path, 'r', encoding='utf-8') as f:
             docs_data = json.load(f)
             self._extract_documents_with_metadata(docs_data)
 
-            
         print(f"✓ Loaded {len(self.doc_metadata)} documents with metadata")
 
-        print("Initializing BM25...")
-        # We must sort doc_ids to ensure a consistent mapping
-        # between 0-based indices (used by BM25/FAISS) and external article_ids.
-        self.doc_ids = sorted(self.doc_metadata.keys())
-        self.corpus = [self.doc_metadata[doc_id]['text'] for doc_id in self.doc_ids]
+        # Build corpus in the same order as metadata
+        self.corpus = [meta['text'] for meta in self.doc_metadata]
         self.tokenized_corpus = [word_tokenize(doc.lower()) for doc in self.corpus]
         self.bm25 = BM25Okapi(self.tokenized_corpus)
         print("✓ BM25 initialized successfully!")
 
     def _extract_documents_with_metadata(self, docs_data: Dict):
-        """Extract documents and metadata together, storing both in optimized structures."""
+        """Extract documents in deterministic order and assign ordinal IDs (0, 1, 2, ...)."""
+        current_id = 0
         for category, subcats in docs_data.items():
-            if not isinstance(subcats, dict): continue
             for subcat, systems in subcats.items():
-                if not isinstance(systems, dict): continue
+                self.sub_categories_article_ids[subcat] = []
                 for system_name, system_data in systems.items():
-                    if not isinstance(system_data, dict): continue
-
                     system_brief = system_data.get('brief', '')
                     system_metadata = system_data.get('metadata', {})
                     parts = system_data.get('parts', {})
-
                     for part_name, articles in parts.items():
-                        if isinstance(articles, list):
                             for article in articles:
-                                if isinstance(article, dict):
-                                    article_id = article.get('id')
-                                    if article_id is not None:
-                                        text = f"{article.get('Article_Title', '')}\n{article.get('Article_Text', '')}".strip()
-                                        if text:
-                                            self.doc_metadata[article_id] = {
-                                                'text': text,
-                                                'id': article_id,
-                                                'title': article.get('Article_Title', ''),
-                                                'category': category,
-                                                'subcategory': subcat,
-                                                'system': system_name,
-                                                'system_brief': system_brief,
-                                                'system_metadata': system_metadata,
-                                                'part': part_name
-                                            }
-
-    def _index_to_doc_id(self, indices: List[int]) -> List[int]:
-        """Maps 0-based corpus indices to their original document IDs."""
-        return [self.doc_ids[i] for i in indices]
+                                    text = f"{article.get('Article_Title', '')}\n{article.get('Article_Text', '')}".strip()
+                                    if text:
+                                        # Assign ordinal ID
+                                        doc_id = current_id
+                                        article_id = article.get('id')
+                                        if article_id!= doc_id:
+                                            raise ValueError(f"Document ID mismatch: expected {doc_id}, found {article_id}")
+                                        
+                                        self.doc_metadata.append({
+                                            'text': text,
+                                            'id': doc_id,  # ordinal ID
+                                            'title': article.get('Article_Title', ''),
+                                            'category': category,
+                                            'subcategory': subcat,
+                                            'system': system_name,
+                                            'system_brief': system_brief,
+                                            'system_metadata': system_metadata,
+                                            'part': part_name
+                                        })
+                                        self.sub_categories_article_ids[subcat].append(doc_id)
+                                        current_id += 1
 
     def get_article_metadata(self, doc_id: int) -> Dict:
-        """Get cached article metadata in O(1) time."""
-        return self.doc_metadata.get(doc_id, None)
+        """Get cached article metadata by ordinal ID in O(1) time."""
+        return self.doc_metadata[doc_id]
+
+
+    def get_subcategories_articles_ids(self, subcategories: List[str]) -> List[int]:
+        """Retrieve all ordinal article IDs belonging to the specified subcategories."""
+        article_ids = []
+        for subcat in subcategories:
+            ids = self.sub_categories_article_ids.get(subcat, [])
+            article_ids.extend(ids)
+        print(article_ids)
+        return article_ids
+
+    def _distances_to_scores(self, distances: np.ndarray) -> np.ndarray:
+        if self.metric_type == 'l2':
+            return 1.0 / (1.0 + distances)
+        else:  # 'ip'
+            return (distances + 1) / 2
 
     def _embed_query(self, query: str) -> np.ndarray:
         """Generate embedding for query."""
         embedding = np.array(self.embeddings_model.encode([query])["dense_vecs"], dtype='float32')
         if self.metric_type == 'ip':
-            # Normalize for Inner Product (Cosine Similarity)
             faiss.normalize_L2(embedding)
         return embedding
 
@@ -105,71 +118,152 @@ class Retriever:
         return np.ones_like(scores) if max_s == min_s else (scores - min_s) / (max_s - min_s)
 
     def dense(self, query: str, k: int = 10) -> Tuple[np.ndarray, List[int]]:
-        """Dense retrieval using FAISS. Returns (scores, doc_ids)."""
+        """Dense retrieval using FAISS. Returns (normalized scores, ordinal doc_ids)."""
         query_emb = self._embed_query(query)
         distances, indices = self.index.search(query_emb, k)
 
-        # Convert distances to similarity scores [0, 1]
-        if self.metric_type == 'l2':
-            scores = 1.0 / (1.0 + distances[0])
-        else: # 'ip'
-            scores = (distances[0] + 1) / 2 # Assuming normalized vectors, IP is in [-1, 1]
-
-        doc_ids = self._index_to_doc_id(indices[0])
+        scores = self._distances_to_scores(distances[0])
+        doc_ids = indices[0].tolist()  # Already ordinal indices
         return self._normalize(scores), doc_ids
 
     def sparse(self, query: str, k: int = 10) -> Tuple[np.ndarray, List[int]]:
-        """Sparse retrieval using BM25. Returns (scores, doc_ids)."""
+        """Sparse retrieval using BM25. Returns (normalized scores, ordinal doc_ids)."""
         tokenized_query = word_tokenize(query.lower())
         bm25_scores = self.bm25.get_scores(tokenized_query)
-        
-        # Get top-k indices (relative to corpus)
         top_k_indices = np.argsort(bm25_scores)[::-1][:k]
-        
+
         scores = bm25_scores[top_k_indices]
-        doc_ids = self._index_to_doc_id(top_k_indices)
-        
+        doc_ids = top_k_indices.tolist()
         return self._normalize(scores), doc_ids
 
     def hybrid(self, query: str, k: int = 10, dense_weight: float = 0.7, sparse_weight: float = 0.3) -> Tuple[np.ndarray, List[int]]:
         """
-        Hybrid retrieval that reuses the existing dense() and sparse() helpers.
-        Strategy:
-        - Call self.dense(query, k) to get top-k dense candidates (doc ids and dense scores).
-        - Call self.sparse(query, k=len(corpus)) to get sparse scores across the corpus.
-        - Combine dense and sparse scores for the dense candidate set using provided weights.
-
-        Returns normalized hybrid scores and the corresponding original doc IDs.
+        Hybrid retrieval using dense and sparse signals.
+        - Dense: top-k candidates from FAISS (ordinal IDs).
+        - Sparse: full BM25 scores over corpus.
+        - Combine only on dense candidates.
         """
-        # 1) Get dense results (scores already normalized by dense())
         dense_scores, dense_doc_ids = self.dense(query, k=k)
-
-        # 2) Get sparse scores for the whole corpus (normalized)
-        # Note: sparse() expects a k but we only need the score vector; call with k=len(self.corpus)
         full_sparse_scores, _ = self.sparse(query, k=len(self.corpus))
 
-        # Build a mapping from doc_id -> sparse_score for O(1) lookup
-        sparse_score_map = {doc_id: score for doc_id, score in zip(self.doc_ids, full_sparse_scores)}
-
-        # 3) Combine scores for dense candidates only
+        # Combine scores for dense candidates
         results = []
         for d_score, doc_id in zip(dense_scores, dense_doc_ids):
-            s_score = sparse_score_map.get(doc_id, 0.0)
-            hybrid_score = (dense_weight * float(d_score)) + (sparse_weight * float(s_score))
+            s_score = full_sparse_scores[doc_id]  # Direct indexing
+            hybrid_score = dense_weight * float(d_score) + sparse_weight * float(s_score)
             results.append((doc_id, hybrid_score))
 
-        # 4) Sort by hybrid score descending
         results.sort(key=lambda x: x[1], reverse=True)
 
         if not results:
             return np.array([]), []
 
         final_doc_ids, final_scores = zip(*results)
-        # Normalize hybrid scores before returning
         normalized_final_scores = self._normalize(np.array(final_scores))
-
         return normalized_final_scores, list(final_doc_ids)
     
+
+    def re_ranked_search(
+        self,
+        query: str,
+        relevant_terms: List[str] = None,
+        subcategory_filters: List[str] = None,
+        k: int = 10,
+        keyword_boost: float = 0.3
+    ) -> Tuple[np.ndarray, List[int]]:
+        """
+        Perform search with semantic keyword boosting (non-strict matching).
+
+        Instead of hard filtering, this method:
+        - Uses subcategory filters as hard constraints (ordinal indices)
+        - Boosts documents semantically related to relevant terms via BM25
+        - Dynamically expands candidate set for keyword-enhanced results
+
+        Args:
+            query: Search query string
+            relevant_terms: Terms to boost semantically related documents (optional)
+            subcategory_filters: Subcategories for hard filtering (optional)
+            k: Number of results to return
+            keyword_boost: Weight for BM25 signal (0.0–1.0)
+
+        Returns:
+            Tuple of (normalized scores, ordinal doc_ids)
+        """
+        # 1. Apply hard subcategory filter if provided
+        filtered_indices = None
+        if subcategory_filters:
+            valid_doc_ids = self.get_subcategories_articles_ids(subcategory_filters)
+            print(f"Filtering to {len(valid_doc_ids)} documents in subcategories: {subcategory_filters}")
+            if not valid_doc_ids:
+                return np.array([]), []
+            filtered_indices = np.array(valid_doc_ids, dtype=np.int64)
+
+        # 2. Determine candidate set size
+        base_candidates = k
+        if relevant_terms and len(relevant_terms) > 0:
+            base_candidates = min(1000, k * 15)  # Expand for keyword signals
+
+        # Ensure we don't request more than available
+        base_candidates = min(base_candidates, self.index.ntotal)
+
+        # 3. Perform dense search
+        query_embedding = self._embed_query(query)
+        distances, candidate_indices = self.index.search(
+            query_embedding, min(base_candidates * 2, self.index.ntotal)
+        )
+
+        # Flatten
+        candidate_indices = candidate_indices[0]
+        distances = distances[0]
+
+        # 4. Apply hard subcategory filtering manually (since FAISS selector is ignored in FlatIP)
+        if filtered_indices is not None:
+            mask = np.isin(candidate_indices, filtered_indices)
+            candidate_indices = candidate_indices[mask]
+            distances = distances[mask]
+
+        # Handle empty results
+        if candidate_indices.size == 0:
+            return np.array([]), []
+
+        # 5. Normalize dense scores
+        dense_scores = self._distances_to_scores(distances)
+        dense_scores = self._normalize(dense_scores)
+
+        # 6. Early return if no relevant terms
+        if not relevant_terms or len(relevant_terms) == 0:
+            top_k_indices = candidate_indices[:k]
+            top_k_scores = dense_scores[:k]
+            return self._normalize(top_k_scores), top_k_indices.tolist()
+
+        # 7. Compute BM25-based keyword relevance for candidates
+        candidate_bm25_scores = np.zeros(len(candidate_indices))
+        for term in relevant_terms:
+            term_tokenized = word_tokenize(term.lower())
+            if not term_tokenized:
+                continue
+            term_scores = self.bm25.get_scores(term_tokenized)  # Shape: (N,)
+            candidate_bm25_scores += term_scores[candidate_indices]
+
+        # Normalize BM25 scores
+        max_bm25 = np.max(candidate_bm25_scores)
+        if max_bm25 > 0:
+            candidate_bm25_scores /= max_bm25
+        else:
+            candidate_bm25_scores = np.zeros_like(candidate_bm25_scores)
+
+        # 8. Fuse dense and sparse signals
+        combined_scores = (
+            (1.0 - keyword_boost) * dense_scores +
+            keyword_boost * candidate_bm25_scores
+        )
+
+        # 9. Select top-k results
+        top_k_local_indices = np.argsort(combined_scores)[::-1][:k]
+        top_scores = combined_scores[top_k_local_indices]
+        top_doc_ids = candidate_indices[top_k_local_indices].tolist()
+
+        return self._normalize(top_scores), top_doc_ids
 
 
 class RetrievalEvaluator:
