@@ -52,39 +52,39 @@ Two different similarity/distance metrics are used for FAISS indexing:
 
 | File | Model | Configuration | Description |
 |------|-------|---------------|-------------|
-| `evaluation_report_m3.json` | BGE-M3 | IP indexing | Base model performance |
-| `evaluation_report_m3_L2.json` | BGE-M3 | L2 indexing | Base model with L2 distance |
-| `evaluation_report_law.json` | BGE-M3-Law | IP indexing | Fine-tuned legal model |
-| `evaluation_report_law_L2.json` | BGE-M3-Law | L2 indexing | Legal model with L2 distance |
-| `evaluation_report_regular_m3.json` | BGE-M3 | Regular retrieval | Dense retrieval only |
-| `evaluation_report_hybrid_m3.json` | BGE-M3 | Hybrid retrieval | Dense + Sparse retrieval |
-| `evaluation_report_m3_reranked.json` | BGE-M3 | Reranked | Post-processing optimized |
+| `assets/evaluation_report_m3.json` | BGE-M3 | IP indexing | Base model performance |
+| `assets/evaluation_report_m3_L2.json` | BGE-M3 | L2 indexing | Base model with L2 distance |
+| `assets/evaluation_report_law.json` | BGE-M3-Law | IP indexing | Fine-tuned legal model |
+| `assets/evaluation_report_law_L2.json` | BGE-M3-Law | L2 indexing | Legal model with L2 distance |
+| `assets/evaluation_report_regular_m3.json` | BGE-M3 | Regular retrieval | Dense retrieval only |
+| `assets/evaluation_report_hybrid_m3.json` | BGE-M3 | Hybrid retrieval | Dense + Sparse retrieval |
+| `assets/evaluation_report_m3_reranked.json` | BGE-M3 | Reranked | Post-processing optimized |
 
 ### 🔍 Detailed Results
 *Contains query-by-query results with retrieved documents and scores*
 
 | File | Model | Configuration | Use Case |
 |------|-------|---------------|----------|
-| `detailed_results_m3.json` | BGE-M3 | IP indexing | Deep analysis of base model |
-| `detailed_results_m3_L2.json` | BGE-M3 | L2 indexing | L2 distance detailed results |
-| `detailed_results_law.json` | BGE-M3-Law | IP indexing | Legal model query analysis |
-| `detailed_results_law_L2.json` | BGE-M3-Law | L2 indexing | Legal + L2 detailed results |
-| `detailed_results_regular_m3.json` | BGE-M3 | Regular retrieval | Dense retrieval analysis |
-| `detailed_results_hybrid_m3.json` | BGE-M3 | Hybrid retrieval | Dense + Sparse detailed view |
-| `detailed_results_m3_reranked.json` | BGE-M3 | Reranked | Reranking impact analysis |
+| `assets/detailed_results_m3.json` | BGE-M3 | IP indexing | Deep analysis of base model |
+| `assets/detailed_results_m3_L2.json` | BGE-M3 | L2 indexing | L2 distance detailed results |
+| `assets/detailed_results_law.json` | BGE-M3-Law | IP indexing | Legal model query analysis |
+| `assets/detailed_results_law_L2.json` | BGE-M3-Law | L2 indexing | Legal + L2 detailed results |
+| `assets/detailed_results_regular_m3.json` | BGE-M3 | Regular retrieval | Dense retrieval analysis |
+| `assets/detailed_results_hybrid_m3.json` | BGE-M3 | Hybrid retrieval | Dense + Sparse detailed view |
+| `assets/detailed_results_m3_reranked.json` | BGE-M3 | Reranked | Reranking impact analysis |
 
 ### 📊 Visualization Charts
 *Performance metrics visualizations (embedded above)*
 
 | Chart | Model | Configuration | Visual Focus |
 |-------|-------|---------------|--------------|
-| `evaluation_metrics_m3.png` | BGE-M3 | IP indexing | Base performance visualization |
-| `evaluation_metrics_m3_L2.png` | BGE-M3 | L2 indexing | L2 distance metrics |
-| `evaluation_metrics_law.png` | BGE-M3-Law | IP indexing | Legal specialization impact |
-| `evaluation_metrics_law_L2.png` | BGE-M3-Law | L2 indexing | Legal + L2 performance |
-| `evaluation_metrics_regular_m3.png` | BGE-M3 | Regular retrieval | Dense retrieval metrics |
-| `evaluation_metrics_hybrid_m3.png` | BGE-M3 | Hybrid retrieval | Dense + Sparse comparison |
-| `evaluation_metrics_m3_reranked.png` | BGE-M3 | Reranked | Reranking effectiveness |
+| `assets/evaluation_metrics_m3.png` | BGE-M3 | IP indexing | Base performance visualization |
+| `assets/evaluation_metrics_m3_L2.png` | BGE-M3 | L2 indexing | L2 distance metrics |
+| `assets/evaluation_metrics_law.png` | BGE-M3-Law | IP indexing | Legal specialization impact |
+| `assets/evaluation_metrics_law_L2.png` | BGE-M3-Law | L2 indexing | Legal + L2 performance |
+| `assets/evaluation_metrics_regular_m3.png` | BGE-M3 | Regular retrieval | Dense retrieval metrics |
+| `assets/evaluation_metrics_hybrid_m3.png` | BGE-M3 | Hybrid retrieval | Dense + Sparse comparison |
+| `assets/evaluation_metrics_m3_reranked.png` | BGE-M3 | Reranked | Reranking effectiveness |
 
 ## Evaluation Metrics
 
