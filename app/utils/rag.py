@@ -181,7 +181,18 @@ class LegalAssistantRAG:
         if not docs:
             return "No relevant articles found."
 
-        formatted = []
+        # Add explicit citation instruction at the beginning
+        citation_header = """⚠️ CRITICAL INSTRUCTION: For EVERY fact you mention from these articles, you MUST add this citation format IMMEDIATELY after the fact:
+(المصدر: [law_name] - [article_title])
+
+Example: "يعاقب بالسجن مدة لا تتجاوز سبع سنوات (المصدر: نظام مكافحة الاحتيال المالي وخيانة الأمانة - المادة الأولى)."
+
+DO NOT just list the law name. Add (المصدر: ...) after EACH legal statement.
+
+Articles found:
+"""
+
+        formatted = [citation_header]
         for i, doc in enumerate(docs, 1):
             article = f"""<article index="{i}">
 <source>
@@ -193,6 +204,9 @@ class LegalAssistantRAG:
 <content>
 {doc.get('Article_Text', 'No content')}
 </content>
+<citation_to_use>
+CITE THIS AS: (المصدر: {doc.get('law_name', 'N/A')} - {doc.get('Article_Title', 'N/A')})
+</citation_to_use>
 </article>"""
             formatted.append(article)
 
@@ -249,10 +263,42 @@ This tool searches Saudi legal documents.
     * If the tool returns "No relevant articles found" or the articles do not contain the answer, you MUST state: "I cannot answer this based on the available legal documents."
     * Do NOT invent information or use external knowledge for legal matters.
 
+**⚠️ CRITICAL: MANDATORY Citation Format - NON-NEGOTIABLE ⚠️**
+
+When you use the legal_search tool, it will provide you with a <citation_to_use> tag for EACH article.
+You MUST copy this EXACT citation and add it in parentheses IMMEDIATELY after any fact you mention from that article.
+
+**REQUIRED FORMAT (Use the exact text from <citation_to_use>):**
+(المصدر: [اسم النظام الكامل] - [عنوان المادة الكامل])
+
+**DO THIS - Citation immediately after EVERY legal fact:**
+✓ "يعاقب بالسجن مدة لا تتجاوز سبع سنوات (المصدر: نظام مكافحة الاحتيال المالي وخيانة الأمانة - المادة الأولى)."
+✓ "يصدر مجلس الوزراء اللوائح التنفيذية (المصدر: النظام الأساسي للحكم - المادة السبعون)."
+
+**DO NOT DO THIS - These are WRONG:**
+✗ Listing the law name without the citation format!
+✗ Putting citation at the beginning instead of after each fact!
+✗ Generic references like "حسب النظام" or "وفقاً للمادة"!
+
+**MANDATORY STEPS:**
+1. Read the <content> from the article
+2. Find the <citation_to_use> tag
+3. When you write ANY fact from that article, COPY the citation from <citation_to_use> and paste it in parentheses immediately after the fact
+4. Repeat for EACH article you reference
+
+**Example of CORRECT Response Structure:**
+"تختلف عقوبة السرقة حسب نوعها:
+
+• الاستيلاء على مال الغير باستخدام الاحتيال يعاقب بالسجن مدة لا تتجاوز سبع سنوات (المصدر: نظام مكافحة الاحتيال المالي وخيانة الأمانة - المادة الأولى).
+
+• الاستيلاء على أثر من ممتلكات الدولة يعاقب بالسجن لمدة لا تقل عن ثلاثة أشهر (المصدر: نظام الآثار والمتاحف والتراث العمراني - المادة الحادية والسبعون)."
+
 **Response Quality Guidelines:**
 * Be precise, professional, and formal.
-* Cite sources clearly for all legal information.
+* ALWAYS cite sources inline using (المصدر: ...) format.
 * Keep responses concise but complete.
+* Use bullet points for multiple related laws.
+* Never provide legal information without the EXACT citation format.
 """
 
         prompt = ChatPromptTemplate.from_messages(
