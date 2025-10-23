@@ -35,7 +35,7 @@ class Retriever:
 
         print("Loading documents and metadata...")
         self.doc_metadata = []  # List indexed by ordinal doc_id (0 to N-1)
-        self.sub_categories_article_ids = {}  # Maps subcat -> list of ordinal indices
+        self.sub_categories_article_ids = {}  # Maps subcat -> list of sub_categories indices
 
         with open(documents_path, 'r', encoding='utf-8') as f:
             docs_data = json.load(f)
@@ -53,24 +53,14 @@ class Retriever:
         """Extract documents in deterministic order and assign ordinal IDs (0, 1, 2, ...)."""
         current_id = 0
         for category, subcats in docs_data.items():
-            if not isinstance(subcats, dict):
-                continue
             for subcat, systems in subcats.items():
-                if not isinstance(systems, dict):
-                    continue
                 self.sub_categories_article_ids[subcat] = []
                 for system_name, system_data in systems.items():
-                    if not isinstance(system_data, dict):
-                        continue
-
                     system_brief = system_data.get('brief', '')
                     system_metadata = system_data.get('metadata', {})
                     parts = system_data.get('parts', {})
-
                     for part_name, articles in parts.items():
-                        if isinstance(articles, list):
                             for article in articles:
-                                if isinstance(article, dict):
                                     text = f"{article.get('Article_Title', '')}\n{article.get('Article_Text', '')}".strip()
                                     if text:
                                         # Assign ordinal ID
@@ -104,6 +94,7 @@ class Retriever:
         for subcat in subcategories:
             ids = self.sub_categories_article_ids.get(subcat, [])
             article_ids.extend(ids)
+        print(article_ids)
         return article_ids
 
     def _distances_to_scores(self, distances: np.ndarray) -> np.ndarray:
@@ -182,19 +173,19 @@ class Retriever:
     ) -> Tuple[np.ndarray, List[int]]:
         """
         Perform search with semantic keyword boosting (non-strict matching).
-        
+
         Instead of hard filtering, this method:
         - Uses subcategory filters as hard constraints (ordinal indices)
         - Boosts documents semantically related to relevant terms via BM25
         - Dynamically expands candidate set for keyword-enhanced results
-        
+
         Args:
             query: Search query string
             relevant_terms: Terms to boost semantically related documents (optional)
             subcategory_filters: Subcategories for hard filtering (optional)
             k: Number of results to return
             keyword_boost: Weight for BM25 signal (0.0–1.0)
-        
+
         Returns:
             Tuple of (normalized scores, ordinal doc_ids)
         """
@@ -215,65 +206,65 @@ class Retriever:
         # Ensure we don't request more than available
         base_candidates = min(base_candidates, self.index.ntotal)
 
-        # 3. Perform dense search with optional filtering
+        # 3. Perform dense search
         query_embedding = self._embed_query(query)
+        distances, candidate_indices = self.index.search(
+            query_embedding, min(base_candidates * 2, self.index.ntotal)
+        )
 
-        if filtered_indices is not None:
-            # Use FAISS ID selector for hard filtering
-            selector = faiss.IDSelectorArray(filtered_indices)
-            distances, candidate_indices = self.index.search(
-                query_embedding, base_candidates, params=faiss.SearchParameters(sel=selector)
-            )
-        else:
-            distances, candidate_indices = self.index.search(query_embedding, base_candidates)
-
-        # Handle empty results
-        if candidate_indices.size == 0 or len(candidate_indices[0]) == 0:
-            return np.array([]), []
-
-        candidate_indices = candidate_indices[0]  # Shape: (n,)
+        # Flatten
+        candidate_indices = candidate_indices[0]
         distances = distances[0]
 
-        # 4. Normalize dense scores
+        # 4. Apply hard subcategory filtering manually (since FAISS selector is ignored in FlatIP)
+        if filtered_indices is not None:
+            mask = np.isin(candidate_indices, filtered_indices)
+            candidate_indices = candidate_indices[mask]
+            distances = distances[mask]
+
+        # Handle empty results
+        if candidate_indices.size == 0:
+            return np.array([]), []
+
+        # 5. Normalize dense scores
         dense_scores = self._distances_to_scores(distances)
         dense_scores = self._normalize(dense_scores)
 
-        # 5. Early return if no relevant terms
+        # 6. Early return if no relevant terms
         if not relevant_terms or len(relevant_terms) == 0:
             top_k_indices = candidate_indices[:k]
             top_k_scores = dense_scores[:k]
             return self._normalize(top_k_scores), top_k_indices.tolist()
 
-        # 6. Compute BM25-based keyword relevance for candidates
+        # 7. Compute BM25-based keyword relevance for candidates
         candidate_bm25_scores = np.zeros(len(candidate_indices))
         for term in relevant_terms:
-            # Get BM25 scores for the entire corpus for this term
             term_tokenized = word_tokenize(term.lower())
             if not term_tokenized:
                 continue
             term_scores = self.bm25.get_scores(term_tokenized)  # Shape: (N,)
-            # Accumulate scores for candidate indices
             candidate_bm25_scores += term_scores[candidate_indices]
 
-        # Normalize BM25 scores across the candidate set
+        # Normalize BM25 scores
         max_bm25 = np.max(candidate_bm25_scores)
         if max_bm25 > 0:
-            candidate_bm25_scores = candidate_bm25_scores / max_bm25
+            candidate_bm25_scores /= max_bm25
         else:
             candidate_bm25_scores = np.zeros_like(candidate_bm25_scores)
 
-        # 7. Fuse dense and sparse signals
+        # 8. Fuse dense and sparse signals
         combined_scores = (
             (1.0 - keyword_boost) * dense_scores +
             keyword_boost * candidate_bm25_scores
         )
 
-        # 8. Select top-k results
+        # 9. Select top-k results
         top_k_local_indices = np.argsort(combined_scores)[::-1][:k]
         top_scores = combined_scores[top_k_local_indices]
         top_doc_ids = candidate_indices[top_k_local_indices].tolist()
 
         return self._normalize(top_scores), top_doc_ids
+
 
 class RetrievalEvaluator:
     """Loads QA dataset and computes standard retrieval metrics."""
