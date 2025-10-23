@@ -155,7 +155,7 @@ const ChatInterface = () => {
                     <img 
                       src="/user-icon-small.png" 
                       alt="User" 
-                      className="w-10 h-10 rounded-xl shadow-md flex-shrink-0"
+                      className="w-10 h-10 flex-shrink-0"
                     />
                   )}
                   
@@ -173,7 +173,7 @@ const ChatInterface = () => {
                     <img 
                       src="/bot-icon-small.png" 
                       alt="Bot" 
-                      className="w-10 h-10 rounded-xl shadow-md flex-shrink-0"
+                      className="w-10 h-10 flex-shrink-0"
                     />
                   )}
                 </div>
@@ -191,7 +191,7 @@ const ChatInterface = () => {
                   <img 
                     src="/bot-icon-small.png" 
                     alt="Bot" 
-                    className="w-10 h-10 rounded-xl shadow-md animate-pulse"
+                    className="w-10 h-10 animate-pulse"
                   />
                 </div>
               )}
