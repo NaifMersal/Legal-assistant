@@ -4,3 +4,5 @@
 *m3_legal_faiss.index
 # Ignore Chroma database directory
 chroma_db/
+.DS_Store
+later.py
