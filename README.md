@@ -105,7 +105,28 @@ Legal-assistant/
 - Deploy the backend using your preferred cloud provider.
 - Deploy the frontend using Vercel, Netlify, or similar platforms.
 
-## 🔌 API Endpoints
+## � Vector Database Setup and RAG Model
+
+### Building the Vector Database
+To build the vector database for the legal documents:
+
+1. Open and run `embedding_using_bge.ipynb`
+   - This notebook processes the legal documents
+   - Creates embeddings using the BGE-M3 model
+   - Builds and saves the FAISS index
+
+### Setting up the RAG Model
+To set up and test the RAG (Retrieval-Augmented Generation) model:
+
+1. Open and run `rag_hybrid_retrieval_setup.ipynb`
+   - This notebook demonstrates the chat LLM model integration
+   - Shows how the hybrid retrieval system works
+   - Tests the complete RAG pipeline
+   - Provides examples of question-answering capabilities
+
+Make sure to run these notebooks in order, as the RAG setup depends on the vector database being properly built first.
+
+## �🔌 API Endpoints
 
 ### Chat
 ```http
