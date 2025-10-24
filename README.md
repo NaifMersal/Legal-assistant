@@ -13,6 +13,14 @@ An intelligent AI-powered legal assistant specialized in Saudi Arabian law, feat
 - **RESTful API**: FastAPI backend with comprehensive endpoints and WebSocket support
 - **Real-time Updates**: Live connection status and typing indicators
 
+## 🖼️ Screenshots
+
+### Home Screen
+![Home Screen](attachments/home_screen.png)
+
+### Chat Interface
+![Chat Interface](attachments/chat_interface.png)
+
 ## 🏗️ Architecture
 
 ```
