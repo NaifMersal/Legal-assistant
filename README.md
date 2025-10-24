@@ -16,10 +16,10 @@ An intelligent AI-powered legal assistant specialized in Saudi Arabian law, feat
 ## 🖼️ Screenshots
 
 ### Home Screen
-![Home Screen](attachments/home_screen.png)
+![Home Screen](law-UI/UI-screenshot-1.png)
 
 ### Chat Interface
-![Chat Interface](attachments/chat_interface.png)
+![Chat Interface](law-UI/UI-screenshot-2.png)
 
 ## 🏗️ Architecture
 
