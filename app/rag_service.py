@@ -9,7 +9,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import BaseMessage
 
 # Import from utils
-from app.utils.retriever import Retriever
+from app.utils.retrievers.retriever import Retriever
 from app.utils.rag import LegalAssistantRAG, RAGConfig
 
 from app.config import Settings

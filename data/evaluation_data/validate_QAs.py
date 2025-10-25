@@ -336,7 +336,7 @@ def main():
     logger.info("Starting QA Dataset Generation with Validation")
     logger.info("="*60)
 
-    output_file = "law_qa_dataset_validated.json"
+    output_file = "data/evaluation_data/relational_qa_dataset_validated.json"
     
     try:
         llm = initialize_llm()

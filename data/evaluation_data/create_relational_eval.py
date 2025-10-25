@@ -4,8 +4,8 @@ import logging
 import json
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Optional, Any, Tuple, Type
-from pydantic import BaseModel, Field
+from typing import List, Dict, Literal, Optional, Any, Tuple, Type
+from pydantic import BaseModel, Field, model_validator, root_validator
 from create_eval import QAPair, Article,ContextPreparer, PromptTemplate, LawData, LawInfo,QADataset,GeneratedQA,DatasetGenerator,\
       ProgressTracker, MAX_QUESTIONS_PER_CALL, setup_logging, count_tokens,\
         initialize_llm, load_and_prepare_laws, get_openai_callback
@@ -21,10 +21,11 @@ logger = setup_logging("relational_generation.log")
 
 class RelationalStep1(BaseModel):
     """Output model for Step 1: Core Concept Discovery"""
-    primary_concept: str
-    secondary_concept: str
-    interaction_type: str
-    evidence_snippet: str
+    primary_concept: Optional[str] = None
+    secondary_concept: Optional[str] = None
+    interaction_type: Optional[str] = None
+    evidence_snippet: Optional[str] = None
+    has_concepts: bool
 
 class RelationalStep2(BaseModel):
     """Output model for Step 2: Concept Expansion"""
@@ -39,6 +40,32 @@ class RelationalStep3(BaseModel):
     key_concepts: List[str] = Field(default_factory=list)
     expected_answer: str
 
+
+class RelationalStep4(BaseModel):
+    """Step 4 output with built-in validation feedback"""
+    validation_status: Literal["success", "failure"] = Field(
+        ...,
+        description="Must be 'success' or 'failure'"
+    )
+    reason: Optional[str] = Field(
+        None,
+        description="Required if status=failure. Why concepts/red herring don't match"
+    )
+    question: Optional[str] = Field(
+        None,
+        description="Arabic scenario text (required for success)"
+    )
+    answer: Optional[str] = Field(
+        None,
+        description="Arabic answer with ID references (required for success)"
+    )
+    references_ids: Optional[List[int]] = Field(
+        None,
+        description="Article IDs from context (required for success)"
+    )
+
+
+    
 # ===================================================
 # === Relational Prompt Templates
 # ===================================================
@@ -54,28 +81,40 @@ class RelationalPrompts:
     - Final ID mapping as separate post-processing step
     """
     
+    
     STEP1_TEMPLATE = """You are a legal concept analyzer. Your task is to identify key legal concepts that interact in the given law context.
 
+IMPORTANT: Some laws are direct articles without interacting concepts (e.g., simple prohibitions, direct commands, standalone definitions). For such laws, indicate there are no concepts.
+
 Rules:
-1. Focus on finding meaningful relationships (e.g., principle/exception, procedure/penalty)
-2. Concepts must be clearly defined in the text
-3. Avoid generic or overly broad concepts
-4. Use specific legal terminology when possible
-5. Concepts must be central to the legal text's purpose, not trivial or isolated details.
+1. First determine if the text contains interacting concepts or is a direct article
+2. Direct articles include: simple prohibitions, direct commands, standalone rules without conceptual framework
+3. If concepts exist: Focus on meaningful relationships (e.g., principle/exception, procedure/penalty)
+4. Concepts must be clearly defined in the text
+5. Avoid generic or overly broad concepts
+6. Use specific legal terminology when possible
+7. Concepts must be central to the legal text's purpose, not trivial or isolated details
 
 Context:
 {context}
 
 Instructions:
-Before outputting, double-check: Is the interaction logical? Is the evidence a direct quote supporting this specific interaction?
+First, assess if this is a direct article or contains interacting concepts.
+If direct article with no concepts, set has_concepts to false and leave other fields null.
+If concepts exist, identify them and double-check: Is the interaction logical? Is the evidence a direct quote supporting this specific interaction?
 
 Return ONLY a JSON object with EXACTLY this structure:
 {{
-    "primary_concept": "<specific name of main concept>",
-    "secondary_concept": "<specific name of related concept>",
-    "interaction_type": "<exactly one of: modifies, enables, overrides, defines, restricts>",
-    "evidence_snippet": "<direct quote from context showing interaction>"
+ "has_concepts": <true or false>,
+ "primary_concept": "<specific name of main concept or null>",
+ "secondary_concept": "<specific name of related concept or null>",
+ "interaction_type": "<exactly one of: modifies, enables, overrides, defines, restricts, or null>",
+ "evidence_snippet": "<direct quote from context showing interaction or null>"
 }}
+
+Examples:
+- Direct article: "Theft is prohibited" → has_concepts: false
+- Concepts: "Contracts require consent, except under duress" → has_concepts: true
 
 Do not include any explanation or other text. Return ONLY the JSON object."""
 
@@ -139,30 +178,50 @@ Output ONLY in JSON. All JSON values (scenario, expected_answer) MUST be written
 """
 
     STEP4_TEMPLATE = """
-You are an expert legal analyst. Your task is to link the given scenario and expected answer to the correct article IDs from the provided context.
+You are an expert legal analyst. **FIRST** validate the scenario against the context. **ONLY** proceed to ID mapping if validation passes.
 
-**Target Language:** Arabic
-
-**Context (with article IDs):**
+# CONTEXT (with article IDs)
 {context}
 
-**Scenario and Concepts to Map:**
+# SCENARIO & CONCEPTS TO VALIDATE
 Scenario: {scenario}
-Expected Answer: {answer}
-Key Concepts: {concepts}
+Expected Answer: {expected_answer}
+Required Concepts:
+- "{primary_concept}"
+- "{secondary_concept}"
+- "{supporting_concepts[0]}"
 
-**Instructions:**
-1. Carefully read the context and identify all articles directly related to the scenario and answer.
-2. Use these article IDs to justify the reasoning.
-3. Ensure that every relevant article ID is explicitly listed under "references_ids".
-4. Do not invent or guess any IDs not present in the context.
+# PHASE 1: CONCEPT VALIDATION (MUST PASS)
+1. Verify ALL required concepts are essential to solve the scenario
+2. Verify the scenario contains a plausible "red herring" from context
+3. IF EITHER CHECK FAILS: Output ONLY:
+   {{"validation_status": "failure", "reason": "Concise explanation"}}
 
-**Output Format (JSON only):**
+# PHASE 2: ID MAPPING (SKIP IF PHASE 1 FAILED)
+1. Identify ALL relevant article IDs from context
+2. Enhance answer with explicit ID references in Arabic
+3. References must ONLY use IDs present in context
+
+# OUTPUT RULES (CHOOSE ONE)
+✓ VALID SCENARIO: 
 {{
-  "question": "The scenario text exactly as provided, mostly written in Arabic",
-  "answer": "The expected_answer rewritten or enhanced with proper references, in Arabic",
-  "references_ids": [<all relevant article IDs from the context>]
+  "validation_status": "success",
+  "question": "Original scenario text in Arabic",
+  "answer": "Enhanced answer with ID references in Arabic",
+  "references_ids": [1, 2, 3]
 }}
+
+✗ INVALID SCENARIO: 
+{{
+  "validation_status": "failure",
+  "reason": "Explain missing concept/red herring"
+}}
+
+# CRITICAL REQUIREMENTS
+- NEVER output extra text
+- Question/answer must be 90%+ Arabic
+- If validation fails, DO NOT include other fields
+- Arabic must contain ID references like "المادة 123"
 """
 
 
@@ -193,14 +252,14 @@ class RelationalQAStrategy:
         self.step1_chain = self.step1_2_llm.with_structured_output(RelationalStep1)
         self.step2_chain = self.step1_2_llm.with_structured_output(RelationalStep2)
         self.step3_chain = self.step3_llm.with_structured_output(RelationalStep3)
-        self.step4_chain = self.step1_2_llm.with_structured_output(QAPair)
+        self.step4_chain = self.step1_2_llm.with_structured_output(RelationalStep4)
         
         self.all_articles_map = all_articles_map
         self.prompts = RelationalPrompts()
         
         
 
-    def generate_scenario(self, context: str) -> Optional[Tuple[RelationalStep3, dict]]:
+    def generate_scenario(self, context: str) -> Optional[Dict[str, Any]]:
         """
         Generates a legal scenario through steps 1-3 without article ID mapping.
         
@@ -222,7 +281,7 @@ class RelationalQAStrategy:
             logger.error(f"Step 1: LLM call failed. Error: {str(e)}")
             return None
 
-        if not step1_result:
+        if not step1_result or not step1_result.has_concepts:
             logger.info("Step 1: No core concepts found in this chunk.")
             return None
         
@@ -283,11 +342,13 @@ class RelationalQAStrategy:
         logger.info(f"Step 3: Successfully generated scenario exploring {len(step3_result.key_concepts)} concepts")
         
 
-        return step3_result
+        return {'scenario': step3_result.scenario, 'expected_answer':step3_result.expected_answer,
+                'primary_concept':step1_result.primary_concept,'secondary_concept':step1_result.secondary_concept,
+                  'supporting_concepts':supporting_concepts}
 
 
 
-def main_generation_loop(output_file: str = "relational_qa_dataset.json"):
+def main_generation_loop(output_file: str = "relational_qa_dataset_v2.json"):
     """
     Main loop showing how to use the RelationalQAStrategy with ProgressTracker.
     
@@ -300,7 +361,7 @@ def main_generation_loop(output_file: str = "relational_qa_dataset.json"):
     tracker = ProgressTracker(output_file)
     dataset, next_id = tracker.load_existing_dataset()
     
-    laws_data = load_and_prepare_laws("saudi_laws_scraped.json")
+    laws_data = load_and_prepare_laws("/home/naif/projects/Legal-RAG/Legal-Assistant/data/saudi_laws_scraped.json")
     all_articles_map = {
         art.id: art 
         for law in laws_data
@@ -364,17 +425,19 @@ def main_generation_loop(output_file: str = "relational_qa_dataset.json"):
                     # Step 4: Map to article IDs
                     logger.info("Starting Step 4: Article ID Mapping")
                     prompt4 = RelationalPrompts.STEP4_TEMPLATE.format(
-                        scenario=step3_result.scenario,
-                        answer=step3_result.expected_answer,
-                        concepts=step3_result.key_concepts,
-                        context=id_context
+                        context=id_context,
+                        scenario=step3_result['scenario'],
+                        expected_answer=step3_result['expected_answer'],
+                        primary_concept=step3_result['primary_concept'],
+                        secondary_concept=step3_result['secondary_concept'],
+                        supporting_concepts=step3_result['supporting_concepts'],
                     )
                     
                     try:
-                        qa_pair = relational_strategy.step4_chain.invoke(prompt4)  
-                        intersection_ids = set(qa_pair.references_ids).intersection(set(selected_article_ids))
-                        if qa_pair and intersection_ids:
-                            logger.info(f"Step 4: Successfully mapped to {len(qa_pair.references_ids)} articles")
+                        step4_result = relational_strategy.step4_chain.invoke(prompt4)
+
+                        if step4_result.validation_status=="success" and set(step4_result.references_ids).issubset(set(selected_article_ids)):
+                            logger.info(f"Step 4: Successfully mapped to {len(step4_result.references_ids)} articles")
                             
                             # Create final GeneratedQA
                             generated_qa = GeneratedQA(
@@ -382,9 +445,9 @@ def main_generation_loop(output_file: str = "relational_qa_dataset.json"):
                                 law_name=law_info.law_name,
                                 phase=current_phase,
                                 category=law_info.category,
-                                question=qa_pair.question,
-                                answer=qa_pair.answer,
-                                references_ids=list(intersection_ids),
+                                question=step4_result.question,
+                                answer=step4_result.answer,
+                                references_ids=step4_result.references_ids,
                                 selected_articles=selected_article_ids,
                                 type="relational",
                             )
