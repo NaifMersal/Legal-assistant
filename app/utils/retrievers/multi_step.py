@@ -139,7 +139,7 @@ Return a JSON-formatted response containing:
         self.logger.info(f"Relevant Terms: {rewriter_output.relevant_terms}")
         self.logger.info(f"Subcategory Filters: {rewriter_output.subcategory_filters}")
         results = self.re_ranked_search(rewriter_output.query,
-                                         relevant_terms = rewriter_output.relevant_terms,
+                                        relevant_terms = rewriter_output.relevant_terms,
                                         subcategory_filters =rewriter_output.subcategory_filters,
                                         k=k
                                         )
@@ -150,3 +150,34 @@ Return a JSON-formatted response containing:
         return self.retrieve(*args, **kwds)
     
 
+class Law2StepRetriever(Retriever):
+    """
+    A class that retrieves legal documents using a two-step process:
+    first retrieving relevant laws, then retrieving articles within those laws.
+    """
+    def __init__(self, laws_faiss_index_path: str, articles_faiss_index_path: str, documents_path: str,
+                 embeddings_model: Any, metric_type: str = 'ip'):
+        super().__init__(articles_faiss_index_path, documents_path, embeddings_model, metric_type)
+        self.laws_faiss_index_path = laws_faiss_index_path
+        self.laws_faiss_index = self._load_faiss_index(self.laws_faiss_index_path)
+
+    def retrieve(self, query: str, k:int, top_laws:int=30) -> Tuple[np.ndarray, List[int]]:
+        """Process the query and return a dictionary with all components.
+
+        Args:
+            query: The original user query
+
+        Returns:
+           Tuple of (normalized scores, ordinal doc_ids)
+        """
+        # Step 1: Retrieve top relevant laws
+        law_scores, law_ids = self._hybrid(self.laws_faiss_index, query, k=top_laws)
+        law_names = [self.law_id_to_name[law_id] for law_id in law_ids]
+
+        # Step 2: Retrieve articles within the top laws
+        results = self.re_ranked_search(query,
+                                        relevant_terms=[query],
+                                        laws_filters=law_names,
+                                        k=k)
+        
+        return results
