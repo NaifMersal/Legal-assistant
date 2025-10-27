@@ -1,3 +1,4 @@
+import json
 import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
@@ -7,7 +8,7 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 from .retriever import Retriever
 from langchain_core.language_models import BaseChatModel
-
+import faiss
 
 class QueryRewriterSubcategoryOutput(BaseModel):
     """Structured output for query rewriting."""
@@ -155,11 +156,10 @@ class Law2StepRetriever(Retriever):
     A class that retrieves legal documents using a two-step process:
     first retrieving relevant laws, then retrieving articles within those laws.
     """
-    def __init__(self, laws_faiss_index_path: str, articles_faiss_index_path: str, documents_path: str,
+    def __init__(self, laws_faiss_index: faiss.Index, articles_faiss_index: faiss.Index, documents_path: str,
                  embeddings_model: Any, metric_type: str = 'ip'):
-        super().__init__(articles_faiss_index_path, documents_path, embeddings_model, metric_type)
-        self.laws_faiss_index_path = laws_faiss_index_path
-        self.laws_faiss_index = self._load_faiss_index(self.laws_faiss_index_path)
+        super().__init__(articles_faiss_index, documents_path, embeddings_model, metric_type)
+        self.laws_faiss_index = laws_faiss_index
 
     def retrieve(self, query: str, k:int, top_laws:int=30) -> Tuple[np.ndarray, List[int]]:
         """Process the query and return a dictionary with all components.
@@ -178,6 +178,43 @@ class Law2StepRetriever(Retriever):
         results = self.re_ranked_search(query,
                                         relevant_terms=[query],
                                         laws_filters=law_names,
+                                        k=k)
+        
+        return results
+    
+
+
+class Part2StepRetriever(Retriever):
+    """
+    A class that retrieves legal documents using a two-step process:
+    first retrieving relevant parts, then retrieving articles within those parts.
+    """
+    def __init__(self, parts_faiss_index:faiss.Index , articles_faiss_index: faiss.Index, id_to_part_path:str, documents_path: str,
+                 embeddings_model: Any, metric_type: str = 'ip'):
+        super().__init__(articles_faiss_index, documents_path, embeddings_model, metric_type)
+        self.parts_faiss_index = parts_faiss_index
+        with open(id_to_part_path, 'r', encoding='utf-8') as f:
+            self.part_level_ids_to_part_id = json.load(f)
+
+    def retrieve(self, query: str, k:int, top_parts:int=50) -> Tuple[np.ndarray, List[int]]:
+        """Process the query and return a dictionary with all components.
+
+        Args:
+            query: The original user query
+
+        Returns:
+           Tuple of (normalized scores, ordinal doc_ids)
+        """
+        # Step 1: Retrieve top relevant parts
+        top_parts_k = min(max(2, top_parts *k), 600)
+
+        part_scores, part_ids = self._hybrid(self.parts_faiss_index, query, k=top_parts_k)
+        part_names = list(set([self.part_level_ids_to_part_id[str(part_id)] for part_id in part_ids])) # to get unique part names
+
+        # Step 2: Retrieve articles within the top parts
+        results = self.re_ranked_search(query,
+                                        relevant_terms=[query],
+                                        parts_filters=part_names,
                                         k=k)
         
         return results

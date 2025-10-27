@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 class Retriever:
     """Handles loading retrieval models and performing search using aligned ordinal indices."""
 
-    def __init__(self, faiss_index_path: str, documents_path: str,
+    def __init__(self, faiss_index: faiss.Index, documents_path: str,
                  embeddings_model: Any, metric_type: str = 'ip'):
         """
         Initializes the Retriever with strict alignment between FAISS index, corpus, and metadata.
@@ -19,13 +19,13 @@ class Retriever:
         All documents are assigned ordinal IDs: 0, 1, ..., N-1, matching FAISS index positions.
 
         Args:
-            faiss_index_path: Path to the FAISS index file.
+            faiss_index: the FAISS index.
             documents_path: Path to the JSON file containing documents and metadata.
             embeddings_model: An embeddings model with an .encode() method.
             metric_type: The metric type used for FAISS ('ip' or 'l2').
         """
         print("Initializing Retriever...")
-        self.index = self._load_faiss_index(faiss_index_path)
+        self.index = faiss_index
         self.embeddings_model = embeddings_model
         self.metric_type = metric_type.lower()
 
@@ -37,6 +37,7 @@ class Retriever:
         self.subcategories_article_ids = {}  # Maps subcat -> list of sub_categories indices
         self.law_id_to_name = {}  # Maps article_id to law_name
         self.laws_data = {}
+        self.part_id_to_articles_ids = {}
         self.corpus = []  # List of document texts indexed by ordinal doc_id
 
 
@@ -69,6 +70,8 @@ class Retriever:
                     self.law_id_to_name[law_id] = law_name
                     law_id += 1
                     for part_name, articles in parts.items():
+                            part_id = law_name + "|" + part_name 
+                            self.part_id_to_articles_ids[part_id] = []
                             for article in articles:
                                     # Assign ordinal ID
                                     doc_id = current_id
@@ -81,8 +84,7 @@ class Retriever:
                                     brief = law_brief.strip()
                                     text = article.get('Article_Text', '').strip()
                                     # Filter out empty parts and join with double newlines for clarity
-                                    
-
+                            
                                     self.docs.append({
                                         'text': text,
                                         'id': doc_id,  # ordinal ID
@@ -105,18 +107,33 @@ class Retriever:
                                     self.corpus.append(entry)
                                     self.laws_data[law_name]['article_ids'].append(doc_id)
                                     self.subcategories_article_ids[subcat].append(doc_id)
+                                    self.part_id_to_articles_ids[part_id].append(doc_id)
                                     current_id += 1
 
-    def _load_faiss_index(self, index_path: str) -> faiss.Index:
-        """Load a FAISS index from the specified path."""
-        index = faiss.read_index(index_path)
-        return index
+
 
     def get_subcategories_articles_ids(self, subcategories: List[str]) -> List[int]:
         """Retrieve all article IDs belonging to the specified subcategories."""
         article_ids = []
         for subcat in subcategories:
             ids = self.subcategories_article_ids.get(subcat, [])
+            article_ids.extend(ids)
+        return article_ids
+    
+    
+    def get_laws_article_ids(self, law_names: List[str]) -> List[int]:
+        """Retrieve all article IDs belonging to the specified laws."""
+        article_ids = []
+        for law_name in law_names:
+            ids = self.laws_data.get(law_name, {}).get('article_ids', [])
+            article_ids.extend(ids)
+        return article_ids
+    
+    def get_parts_article_ids(self, part_ids: List[str]) -> List[int]:
+        """Retrieve all article IDs belonging to the specified parts."""
+        article_ids = []
+        for part_id in part_ids:
+            ids = self.part_id_to_articles_ids.get(part_id, [])
             article_ids.extend(ids)
         return article_ids
 
@@ -182,7 +199,7 @@ class Retriever:
     
     def _hybrid(self, index, query: str, k: int = 10, keyword_boost: float = 0.3) -> Tuple[np.ndarray, List[int]]:
         """Reuses dense search and fusion logic with minimal overhead"""
-        dense_scores, dense_doc_ids = self._dense(index, query, k=k)
+        dense_scores, dense_doc_ids = self._dense(index, query, k=3*k)
         if not dense_doc_ids:
             return np.array([]), []
         
@@ -205,6 +222,7 @@ class Retriever:
         relevant_terms: List[str] = None,
         subcategory_filters: List[str] = None,
         laws_filters: List[str] = None,
+        parts_filters: List[str] = None,
         k: int = 10,
         keyword_boost: float = 0.3
     ) -> Tuple[np.ndarray, List[int]]:
@@ -223,6 +241,13 @@ class Retriever:
                 filtered_indices = np.intersect1d(filtered_indices, np.array(law_filtered_ids, dtype=np.int64))
             else:
                 filtered_indices = np.array(law_filtered_ids, dtype=np.int64)
+
+        if parts_filters:
+            part_filtered_ids = self.get_parts_article_ids(parts_filters)
+            if filtered_indices is not None:
+                filtered_indices = np.intersect1d(filtered_indices, np.array(part_filtered_ids, dtype=np.int64))
+            else:
+                filtered_indices = np.array(part_filtered_ids, dtype=np.int64)
 
         # 2. Replaced with reusable dense search with filtering
         selector = faiss.IDSelectorArray(filtered_indices) if filtered_indices is not None else None
