@@ -139,7 +139,7 @@ Return a JSON-formatted response containing:
         self.logger.info(f"Rewritten Query: {rewriter_output.query}")
         self.logger.info(f"Relevant Terms: {rewriter_output.relevant_terms}")
         self.logger.info(f"Subcategory Filters: {rewriter_output.subcategory_filters}")
-        results = self.re_ranked_search(rewriter_output.query,
+        results = self.filtered_search(rewriter_output.query,
                                         relevant_terms = rewriter_output.relevant_terms,
                                         subcategory_filters =rewriter_output.subcategory_filters,
                                         k=k
@@ -151,7 +151,7 @@ Return a JSON-formatted response containing:
         return self.retrieve(*args, **kwds)
     
 
-class Law2StepRetriever(Retriever):
+class FilteredLaw2StepRetriever(Retriever):
     """
     A class that retrieves legal documents using a two-step process:
     first retrieving relevant laws, then retrieving articles within those laws.
@@ -175,16 +175,16 @@ class Law2StepRetriever(Retriever):
         law_names = [self.law_id_to_name[law_id] for law_id in law_ids]
 
         # Step 2: Retrieve articles within the top laws
-        results = self.re_ranked_search(query,
+        results = self.filtered_search(query,
                                         relevant_terms=[query],
                                         laws_filters=law_names,
                                         k=k)
         
         return results
     
-
-
-class Part2StepRetriever(Retriever):
+    
+    
+class FilteredPart2StepRetriever(Retriever):
     """
     A class that retrieves legal documents using a two-step process:
     first retrieving relevant parts, then retrieving articles within those parts.
@@ -212,9 +212,94 @@ class Part2StepRetriever(Retriever):
         part_names = list(set([self.part_level_ids_to_part_id[str(part_id)] for part_id in part_ids])) # to get unique part names
 
         # Step 2: Retrieve articles within the top parts
-        results = self.re_ranked_search(query,
+        results = self.filtered_search(query,
                                         relevant_terms=[query],
                                         parts_filters=part_names,
+                                        k=k)
+        
+        return results
+    
+
+class RankLaw2StepRetriever(Retriever):
+    """
+    A class that retrieves legal documents using a two-step process:
+    first retrieving relevant laws, then retrieving articles within those laws.
+    """
+    def __init__(self, laws_faiss_index: faiss.Index, articles_faiss_index: faiss.Index, documents_path: str,
+                 embeddings_model: Any, metric_type: str = 'ip'):
+        super().__init__(articles_faiss_index, documents_path, embeddings_model, metric_type)
+        self.laws_faiss_index = laws_faiss_index
+
+    def retrieve(self,
+                query: str,
+                k:int,
+                laws_global_weight:int = 0.25,
+                keyword_boost:int=0.25,
+                top_laws:int=8
+                ) -> Tuple[np.ndarray, List[int]]:
+        """Process the query and return a dictionary with all components.
+
+        Args:
+            query: The original user query
+
+        Returns:
+           Tuple of (normalized scores, ordinal doc_ids)
+        """
+        # Step 1: Retrieve top relevant laws
+        law_scores, law_ids = self._hybrid(self.laws_faiss_index, query, k=top_laws)
+        laws_to_scores = {self.law_id_to_name[law_id]:score  for law_id, score in zip(law_ids,law_scores)}
+
+        # Step 2: Retrieve articles within the top laws
+        results = self.re_ranked_search(query,
+                                        relevant_terms=[query],
+                                        laws_to_scores=laws_to_scores,
+                                        laws_global_weight=laws_global_weight,
+                                        keyword_boost=keyword_boost,
+                                        k=k)
+        
+        return results
+    
+    
+    
+
+
+class RankPart2StepRetriever(Retriever):
+    """
+    A class that retrieves legal documents using a two-step process:
+    first retrieving relevant parts, then retrieving articles within those parts.
+    """
+    def __init__(self, parts_faiss_index:faiss.Index , articles_faiss_index: faiss.Index, id_to_part_path:str, documents_path: str,
+                 embeddings_model: Any, metric_type: str = 'ip'):
+        super().__init__(articles_faiss_index, documents_path, embeddings_model, metric_type)
+        self.parts_faiss_index = parts_faiss_index
+        with open(id_to_part_path, 'r', encoding='utf-8') as f:
+            self.part_level_ids_to_part_id = json.load(f)
+
+    def retrieve(self, query: str, k:int, parts_global_weight:int =0.2, keyword_boost:int =0.2 , top_parts:int=200) -> Tuple[np.ndarray, List[int]]:
+        """Process the query and return a dictionary with all components.
+
+        Args:
+            query: The original user query
+
+        Returns:
+           Tuple of (normalized scores, ordinal doc_ids)
+        """
+        # Step 1: Retrieve top relevant parts
+        top_parts_k = top_parts
+
+        part_scores, part_ids = self._hybrid(self.parts_faiss_index, query, k=top_parts_k)
+        parts_to_scores = {}
+        for pid, score in zip(part_ids, part_scores):
+            part_name = self.part_level_ids_to_part_id[str(pid)]
+            parts_to_scores[part_name] = max(parts_to_scores.get(part_name, float('-inf')), float(score))
+
+
+        # Step 2: Retrieve articles within the top parts
+        results = self.re_ranked_search(query,
+                                        relevant_terms=[query],
+                                        parts_to_scores=parts_to_scores,
+                                        parts_global_weight=parts_global_weight,
+                                        keyword_boost=keyword_boost,
                                         k=k)
         
         return results

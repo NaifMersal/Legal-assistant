@@ -22,6 +22,26 @@ class EvaluationMetrics:
 
 # --- Combined Evaluator and Experiment Class ---
 
+import os
+import json
+import random
+import itertools
+from pprint import pprint
+from dataclasses import dataclass
+from typing import List, Dict, Any, Callable, Optional, Tuple, Union
+import numpy as np
+from tqdm import tqdm
+
+@dataclass
+class EvaluationMetrics:
+    """A data container for holding all computed evaluation metrics."""
+    recall_at_k: Dict[int, float]
+    precision_at_k: Dict[int, float]
+    mrr: float
+    map_score: float
+    ndcg_at_k: Dict[int, float]
+    hit_rate_at_k: Dict[int, float]
+
 class RetrievalEvaluator:
     """
     Loads a QA dataset, runs retrieval evaluation, and stores results.
@@ -51,8 +71,8 @@ class RetrievalEvaluator:
             approach_desc: A human-readable description (e.g., "hybrid (dense + sparse)").
             model_name: The name of the model(s) used (e.g., "BAAI/bge-m3 + BM25").
             retrieve_function: The function to call to get results for a query.
-                               Expected signature: retrieve_function(query: str, k: int) -> (scores, indices)
-            qa_dataset_path: Path to the JSON file containing QA pairs.
+                               Expected signature: retrieve_function(query: str, k: int, **kwargs) -> (scores, indices)
+            qa_pairs: List of QA dictionaries.
             k_values: A list of k values to use for @k metrics.
             is_baseline: Mark this as the baseline for comparisons.
         """
@@ -111,7 +131,6 @@ class RetrievalEvaluator:
                 precision_at_i = hits / rank
                 precision_sum += precision_at_i
                 
-        # Handle case where no relevant docs were retrieved
         if hits == 0:
             return 0.0
             
@@ -120,13 +139,11 @@ class RetrievalEvaluator:
     def ndcg_at_k(self, retrieved: List[int], relevant: List[int], k: int) -> float:
         """Calculate Normalized Discounted Cumulative Gain (nDCG)@k."""
         relevant_set = set(relevant)
-        # Calculate DCG@k
         dcg = 0.0
         for i, doc_id in enumerate(retrieved[:k]):
             if doc_id in relevant_set:
                 dcg += 1.0 / np.log2(i + 2) # rank = i + 1
         
-        # Calculate Ideal DCG@k (IDCG@k)
         num_relevant = len(relevant)
         ideal_k = min(num_relevant, k)
         idcg = sum(1.0 / np.log2(i + 2) for i in range(ideal_k))
@@ -145,25 +162,35 @@ class RetrievalEvaluator:
 
     # --- Evaluation Execution ---
 
-    def evaluate_single_query(self, qa_pair: Dict[str, Any]) -> Dict[str, Any]:
-        """Evaluate a single query."""
-        question = qa_pair.get('question', qa_pair.get('query')) # Support 'question' or 'query'
-        relevant_ids = qa_pair.get('relevant_ids', qa_pair.get('references_ids')) # Support 'relevant_ids' or 'references_ids'
+    def evaluate_single_query(self, qa_pair: Dict[str, Any], retrieve_kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Evaluate a single query.
+        
+        Args:
+            qa_pair: A dictionary containing 'question' and 'relevant_ids'.
+            retrieve_kwargs: A dictionary of extra keyword arguments to pass
+                             to the self.retrieve_function.
+        """
+        question = qa_pair.get('question', qa_pair.get('query'))
+        relevant_ids = qa_pair.get('relevant_ids', qa_pair.get('references_ids'))
         
         if not question or relevant_ids is None:
             print(f"Skipping malformed qa_pair: {qa_pair.get('id', 'Unknown ID')}")
             return None
 
-        # Use self.max_k to ensure we retrieve enough docs for all k-values
-        scores, retrieved_indices = self.retrieve_function(question, k=self.max_k)
+        # *** MODIFIED LINE ***
+        # Pass retrieve_kwargs to the retrieval function
+        scores, retrieved_indices = self.retrieve_function(
+            question, 
+            k=self.max_k, 
+            **retrieve_kwargs
+        )
         
-        # Ensure scores are JSON-serializable
         if hasattr(scores, 'tolist'):
              scores_list = scores.tolist()
         else:
              scores_list = list(scores)
              
-        # Ensure indices are JSON-serializable (and are plain ints/strings)
         if hasattr(retrieved_indices, 'tolist'):
             retrieved_ids = retrieved_indices.tolist()
         else:
@@ -197,17 +224,27 @@ class RetrievalEvaluator:
 
         return results
     
-    def evaluate_all(self, sample_size: int = None, sample_indices_path: str = None) -> Tuple[EvaluationMetrics, List[Dict]]:
+    def evaluate_all(
+        self, 
+        sample_size: int = None, 
+        sample_indices_path: str = None,
+        retrieve_kwargs: Dict[str, Any] = None
+    ) -> Tuple[EvaluationMetrics, List[Dict]]:
         """
         Evaluate all queries in the dataset and store results in self.metrics.
 
         Args:
             sample_size: Number of queries to randomly sample for evaluation.
             sample_indices_path: Path to load/save a fixed set of sample indices.
-            
+            retrieve_kwargs: Keyword arguments to pass to the retrieval function
+                             for this specific evaluation run.
+                             
         Returns:
             A tuple of (EvaluationMetrics, detailed_results_list)
         """
+
+        _kwargs = retrieve_kwargs if retrieve_kwargs else {}
+        
         qa_pairs_to_run = self.qa_pairs
         
         if sample_size and sample_size < len(self.qa_pairs):
@@ -236,8 +273,11 @@ class RetrievalEvaluator:
         ap_scores = []
 
         print(f"Evaluating {len(qa_pairs_to_run)} queries for '{self.name}'...")
+        if _kwargs:
+            print(f"Using parameters: {_kwargs}")
+            
         for qa_pair in tqdm(qa_pairs_to_run):
-            result = self.evaluate_single_query(qa_pair)
+            result = self.evaluate_single_query(qa_pair, retrieve_kwargs=_kwargs)
             if result is None:
                 continue
                 
@@ -264,6 +304,122 @@ class RetrievalEvaluator:
         self.detailed_results = detailed_results
 
         return self.metrics, self.detailed_results
+
+    # --- NEW: Parameter Search ---
+
+    def _generate_param_combinations(self, param_grid: Dict[str, List]) -> List[Dict[str, Any]]:
+        """Helper to create all combinations from a parameter grid."""
+        keys, values = param_grid.items()
+        combinations = list(itertools.product(*values))
+        param_sets = [dict(zip(keys, combo)) for combo in combinations]
+        return param_sets
+
+    def _get_optimization_score(self, metrics: EvaluationMetrics, metric_names: Union[str, List[str]]) -> float:
+        """Helper to extract and average the target metric(s) from a metrics object."""
+        if isinstance(metric_names, str):
+            metric_names = [metric_names]
+        
+        total_score = 0.0
+        count = 0
+        
+        for name in metric_names:
+            try:
+                if name == 'mrr':
+                    total_score += metrics.mrr
+                    count += 1
+                elif name == 'map_score':
+                    total_score += metrics.map_score
+                    count += 1
+                elif name.startswith('recall@'):
+                    k = int(name.split('@')[1])
+                    total_score += metrics.recall_at_k[k]
+                    count += 1
+                elif name.startswith('precision@'):
+                    k = int(name.split('@')[1])
+                    total_score += metrics.precision_at_k[k]
+                    count += 1
+                elif name.startswith('ndcg@'):
+                    k = int(name.split('@')[1])
+                    total_score += metrics.ndcg_at_k[k]
+                    count += 1
+                elif name.startswith('hit_rate@'):
+                    k = int(name.split('@')[1])
+                    total_score += metrics.hit_rate_at_k[k]
+                    count += 1
+                else:
+                    print(f"Warning: Unknown metric_name '{name}'. Skipping.")
+            except KeyError:
+                print(f"Warning: Metric '{name}' not found in results (k={k} not in k_values?). Skipping.")
+            except Exception as e:
+                print(f"Warning: Error processing metric '{name}': {e}. Skipping.")
+
+        if count == 0:
+            print("Error: No valid optimization metrics were found or calculated.")
+            return 0.0
+            
+        return total_score / count
+
+    def search_parameters(
+        self,
+        param_grid: Dict[str, List],
+        metric_to_optimize: Union[str, List[str]],
+        sample_size: int = None,
+        sample_indices_path: str = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Run evaluation over a grid of parameters and find the best set.
+
+        Args:
+            param_grid: A dictionary mapping parameter names to lists of values.
+                        Example: {'weight': [0.1, 0.5], 'boost': [2, 5]}
+            metric_to_optimize: The metric to maximize.
+                                Examples: 'mrr', 'recall@5', 'ndcg@10'
+                                Can also be a list to average: ['mrr', 'ndcg@10']
+            sample_size: Number of queries to sample for this search.
+                         (Recommended for speed).
+            sample_indices_path: Path to load/save sample indices for consistent
+                                 runs.
+        
+        Returns:
+            A list of result dictionaries, sorted from best to worst score.
+            Each dict contains: {'params': {...}, 'score': float, 'metrics': EvaluationMetrics}
+        """
+        print("Starting parameter search...")
+        param_sets = self._generate_param_combinations(param_grid)
+        print(f"Testing {len(param_sets)} parameter combinations.")
+        
+        search_results = []
+
+        for i, params in enumerate(param_sets):
+            print(f"\n--- Run {i+1}/{len(param_sets)} ---")
+            
+            # Run the full evaluation with this set of parameters
+            metrics, _ = self.evaluate_all(
+                sample_size=sample_size,
+                sample_indices_path=sample_indices_path,
+                retrieve_kwargs=params
+            )
+            
+            # Get the score for this run
+            score = self._get_optimization_score(metrics, metric_to_optimize)
+            
+            print(f"Parameters: {params}")
+            print(f"Optimization Score ({metric_to_optimize}): {score:.4f}")
+            
+            search_results.append({
+                'params': params,
+                'score': score,
+                'metrics': metrics  # The full EvaluationMetrics object
+            })
+
+        # Sort by score, descending
+        search_results.sort(key=lambda x: x['score'], reverse=True)
+        
+        print("\n--- Parameter Search Complete ---")
+        print(f"Best parameters found ( optimizing for '{metric_to_optimize}' ):")
+        pprint(search_results[0])
+
+        return search_results
 
     # --- Reporting and Saving (from helper functions) ---
 

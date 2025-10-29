@@ -163,15 +163,26 @@ class Retriever:
         return np.array(self.bm25.get_batch_scores(tokenized, candidate_indices))
 
     def _fuse_scores(
-        self, 
-        dense_scores: np.ndarray, 
-        sparse_scores: np.ndarray, 
-        doc_ids: List[int], 
-        keyword_boost: float, 
+        self,
+        scores_list: List[np.ndarray],
+        weights: List[float],
+        doc_ids: List[int],
         k: int
     ) -> Tuple[np.ndarray, List[int]]:
-        """Fuse and re-rank scores (reusable across methods)"""
-        combined = (1 - keyword_boost) * dense_scores + keyword_boost * sparse_scores
+        """Fuse and re-rank scores using multiple score arrays and weights"""
+        # Validate inputs
+        if len(scores_list) != len(weights):
+            raise ValueError("Number of score arrays must match number of weights")
+        
+        if len(scores_list) == 0:
+            raise ValueError("At least one score array is required")
+        
+        # Combine scores using weighted sum
+        combined = np.zeros_like(scores_list[0])
+        for scores, weight in zip(scores_list, weights):
+            combined += weight * scores
+        
+        # Get top k indices
         top_indices = np.argsort(combined)[::-1][:k]
         
         return (
@@ -199,14 +210,14 @@ class Retriever:
     
     def _hybrid(self, index, query: str, k: int = 10, keyword_boost: float = 0.3) -> Tuple[np.ndarray, List[int]]:
         """Reuses dense search and fusion logic with minimal overhead"""
-        dense_scores, dense_doc_ids = self._dense(index, query, k=3*k)
+        dense_scores, dense_doc_ids = self._dense(index, query, k=5*k)
         if not dense_doc_ids:
             return np.array([]), []
         
         bm25_scores = self._get_candidate_bm25_scores(query, dense_doc_ids)
         bm25_scores = self._normalize(bm25_scores)
         
-        return self._fuse_scores(dense_scores, bm25_scores, dense_doc_ids, keyword_boost, k)    
+        return self._fuse_scores([dense_scores, bm25_scores], [1- keyword_boost, keyword_boost], dense_doc_ids, k)    
 
     def dense(self, query: str, k: int = 10) -> Tuple[np.ndarray, List[int]]:
         """Dense retrieval using FAISS. Returns (normalized scores, ordinal doc_ids)."""
@@ -216,7 +227,7 @@ class Retriever:
         """Hybrid retrieval using dense and sparse signals."""
         return self._hybrid(self.index, query, k, keyword_boost)
 
-    def re_ranked_search(
+    def filtered_search(
         self,
         query: str,
         relevant_terms: List[str] = None,
@@ -266,7 +277,81 @@ class Retriever:
         bm25_scores = self._normalize(bm25_scores)
 
         # 5. Reuse hybrid fusion logic
-        return self._fuse_scores(dense_scores, bm25_scores, candidate_doc_ids, keyword_boost, k)
+        return self._fuse_scores([dense_scores, bm25_scores], [1- keyword_boost, keyword_boost], candidate_doc_ids, k)
+    
+    def re_ranked_search(
+        self,
+        query: str,
+        relevant_terms: List[str] = None,
+        subcategory_to_scores: Dict[str, int] = None,
+        laws_to_scores: Dict[str, int] = None,
+        parts_to_scores: Dict[str, int] = None,
+        k: int = 10,
+        keyword_boost: float = 0.3,
+        subcategory_global_weight: float = 0.0,
+        laws_global_weight: float = 0.0,
+        parts_global_weight: float = 0.0
+    ) -> Tuple[np.ndarray, List[int]]:
+        """
+        Re-ranked search that boosts documents based on filter matches instead of hard filtering.
+        """
+        candidate_set_size = 5 * k  # Get more candidates for re-ranking
+        
+        #  Get initial candidate set (no filtering)
+        dense_scores, candidate_doc_ids = self._dense(self.index, query, candidate_set_size, selector=None)
+        
+        if not candidate_doc_ids:
+            return np.array([]), []
+        
+        #  Prepare scores and weights for fusion
+        scores_list = []
+        weights_list = []  # Dense score weight
+        
+        # Compute BM25 scores if relevant terms exist
+        if relevant_terms and len(relevant_terms) > 0:
+            bm25_scores = np.zeros(len(candidate_doc_ids))
+            combined_terms = " ".join(relevant_terms)
+            bm25_scores = self._get_candidate_bm25_scores(combined_terms, candidate_doc_ids)
+            bm25_scores = self._normalize(bm25_scores)
+            scores_list.append(bm25_scores)
+            weights_list.append(keyword_boost)
+        
+        #  Compute filter scores
+        if subcategory_to_scores and subcategory_global_weight > 0:
+            subcategory_scores = np.zeros(len(candidate_doc_ids))
+            for i, doc_id in enumerate(candidate_doc_ids):
+                subcat = self.docs[doc_id]['subcategory']
+                subcategory_scores[i] = subcategory_to_scores.get(subcat, 0)
+
+            scores_list.append(subcategory_scores)
+            weights_list.append(subcategory_global_weight) 
+
+        if laws_to_scores and laws_global_weight > 0:
+            laws_scores = np.zeros(len(candidate_doc_ids))
+            for i, doc_id in enumerate(candidate_doc_ids):
+                law_name = self.docs[doc_id]['law_name']
+                laws_scores[i] = laws_to_scores.get(law_name, 0)
+
+            scores_list.append(laws_scores)
+            weights_list.append(laws_global_weight)
+
+        
+
+        if parts_to_scores and parts_global_weight > 0:
+            parts_scores = np.zeros(len(candidate_doc_ids))
+            for i, doc_id in enumerate(candidate_doc_ids):
+                part_name = self.docs[doc_id]['part']
+                parts_scores[i] = parts_to_scores.get(part_name, 0)
+
+            scores_list.append(parts_scores)
+            weights_list.append(parts_global_weight)
+
+        dense_weight = 1- sum(weights_list)
+        scores_list.append(dense_scores)
+        weights_list.append(dense_weight)
+        
+        #  Fuse and return top k results
+        return self._fuse_scores(scores_list, weights_list, candidate_doc_ids, k)
 
     def sparse(self, query: str, k: int = 10) -> Tuple[np.ndarray, List[int]]:
         """Sparse retrieval using BM25. Returns (normalized scores, ordinal doc_ids)."""
